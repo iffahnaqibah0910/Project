@@ -39,7 +39,7 @@ export default function Dashboard() {
       <header className="topbar">
         <div>
           <span className="eyebrow">Missing Values</span>
-          <h1>Automated Error Missing Values Detection Dashboard In Machine Running Data Monitoring</h1>
+          <h1>Automated Error Missing Values Detection Dashboard For Machine Running Data Monitoring</h1>
         </div>
         <div className="sensor-picker">
           {SENSORS.map((s) => (

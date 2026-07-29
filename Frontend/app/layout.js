@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Automated Error Missing Values Detection Dashboard",
+  title: "Automated Error Of Missing Values Detection Dashboard",
   description: "Real-time monitoring for missingness, EDA, and anomaly detection",
 };
 
