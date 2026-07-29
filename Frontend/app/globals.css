@@ -1,0 +1,52 @@
+:root {
+  --ink: #0c1210;
+  --panel: #121b19;
+  --panel-raised: #17221f;
+  --line: #223330;
+  --text-primary: #e8efe9;
+  --text-dim: #8ba39b;
+  --amber: #e0a640;
+  --amber-dim: #8a6a34;
+  --alert-red: #d9604f;
+  --ok-green: #5fae7d;
+  --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-attachment: fixed;
+  background-color: var(--ink);
+}
+
+body { position: relative; }
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at top, rgba(224,166,64,0.05), transparent 60%);
+  pointer-events: none;
+}
+
+a { color: inherit; }
+
+::selection { background: var(--amber-dim); color: var(--text-primary); }
+
+button {
+  font-family: var(--sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
