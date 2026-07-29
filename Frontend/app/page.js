@@ -38,8 +38,8 @@ export default function Dashboard() {
     <main className="dashboard">
       <header className="topbar">
         <div>
-          <span className="eyebrow">Machine M-01</span>
-          <h1>Data Quality Console</h1>
+          <span className="eyebrow">Missing Values</span>
+          <h1>Automated Error Missing Values Detection Dashboard In Machine Running Data Monitoring</h1>
         </div>
         <div className="sensor-picker">
           {SENSORS.map((s) => (

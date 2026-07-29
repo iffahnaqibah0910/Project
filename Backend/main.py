@@ -17,7 +17,7 @@ from processing import (
 )
 from rules import apply_rule_engine, check_state_contradictions, missingness_alerts
 
-app = FastAPI(title="Automatic Error Missing Values Detection Dashboard API")
+app = FastAPI(title="Automated Error Missing Values Detection Dashboard API")
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
