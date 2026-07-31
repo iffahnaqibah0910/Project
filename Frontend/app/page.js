@@ -85,10 +85,12 @@ export default function Dashboard() {
           max-width: 1200px;
           margin: 0 auto;
         }
-        .topbar {
+       .topbar {
           display: flex;
-          justify-content: space-between;
-          align-items: flex-end;
+          flex-direction: column;
+          align-items: center;
+          text-align: center;
+          gap: 16px;
           margin-bottom: 28px;
           border-bottom: 1px solid var(--line);
           padding-bottom: 20px;
