@@ -7,13 +7,13 @@ import RollingChart from "../components/RollingChart";
 import AlertFeed from "../components/AlertFeed";
 import DataTable from "../components/DataTable";
 
-const SENSORS = ["temperature", "pressure", "vibration", "rpm"];
+const SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"];
 
 export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);
   const [eda, setEda] = useState(null);
   const [tableData, setTableData] = useState(null);
-  const [sensor, setSensor] = useState("temperature");
+  const [sensor, setSensor] = useState("RUNTIME_SEC");
   const [error, setError] = useState(null);
 
   useEffect(() => {

@@ -1,13 +1,24 @@
 """
 Phase 1 (ingestion & preprocessing) + Phase 2 (rolling-window EDA) logic.
-Pure pandas — works the same whether the DataFrame came from mock data or
-SQL Server.
+Pure pandas on DataFrames loaded from SQL Server.
 """
+import re
+
 import numpy as np
 import pandas as pd
 
-NUMERIC_SENSORS = ["temperature", "pressure", "vibration", "rpm"]
-VALID_STATES = {"running", "idle", "stopped"}
+ALL_COLUMNS = [
+    "MACHCODE",
+    "WKDATE",
+    "MACHNAME",
+    "RUNTIME_SEC",
+    "RUNTIME_HOUR",
+    "DAILY_MC_RATIO",
+    "FACTORY",
+]
+NUMERIC_SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"]
+TIME_COL = "WKDATE"
+_HHMMSS = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
 
 
 def detect_schema_violations(df: pd.DataFrame) -> list[dict]:
@@ -15,13 +26,29 @@ def detect_schema_violations(df: pd.DataFrame) -> list[dict]:
     violations = []
 
     for col in NUMERIC_SENSORS:
-        bad = df[~df[col].apply(lambda v: isinstance(v, (int, float)) or pd.isna(v))]
+        if col not in df.columns:
+            continue
+        bad = df[~df[col].apply(lambda v: isinstance(v, (int, float, np.integer, np.floating)) or pd.isna(v))]
         for idx in bad.index:
-            violations.append({"row": int(idx), "column": col, "issue": "non-numeric value", "value": str(df.loc[idx, col])})
+            violations.append({
+                "row": int(idx),
+                "column": col,
+                "issue": "non-numeric value",
+                "value": str(df.loc[idx, col]),
+            })
 
-    bad_state = df[~df["machine_state"].isin(VALID_STATES) & df["machine_state"].notna()]
-    for idx in bad_state.index:
-        violations.append({"row": int(idx), "column": "machine_state", "issue": "invalid category", "value": str(df.loc[idx, "machine_state"])})
+    if "RUNTIME_HOUR" in df.columns:
+        bad_hour = df[
+            df["RUNTIME_HOUR"].notna()
+            & ~df["RUNTIME_HOUR"].astype(str).str.match(_HHMMSS)
+        ]
+        for idx in bad_hour.index:
+            violations.append({
+                "row": int(idx),
+                "column": "RUNTIME_HOUR",
+                "issue": "invalid HH:MM:SS duration",
+                "value": str(df.loc[idx, "RUNTIME_HOUR"]),
+            })
 
     return violations
 
@@ -30,26 +57,34 @@ def calculate_missingness(df: pd.DataFrame) -> dict:
     """Exact Missingness Percentage (Mp) per column."""
     total = len(df)
     mp = {}
-    for col in NUMERIC_SENSORS:
+    for col in ALL_COLUMNS:
+        if col not in df.columns:
+            mp[col] = 0.0
+            continue
         missing = df[col].isna().sum()
         mp[col] = round(float(missing / total) * 100, 2) if total else 0.0
     return mp
 
 
 def clean_and_impute(df: pd.DataFrame) -> pd.DataFrame:
-    """Deterministic imputation: forward-fill then time-based interpolation
-    for any leading NaNs ffill can't reach. Coerces bad-type cells to NaN first.
+    """Deterministic imputation for numeric sensors: coerce bad types to NaN,
+    then time-based interpolate / ffill / bfill using WKDATE as the index.
     """
     df = df.copy()
     for col in NUMERIC_SENSORS:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["machine_state"] = df["machine_state"].where(df["machine_state"].isin(VALID_STATES))
-    df["machine_state"] = df["machine_state"].ffill().fillna("unknown")
+    if TIME_COL not in df.columns:
+        raise KeyError(f"Expected time column '{TIME_COL}' in dataframe")
 
-    df = df.set_index("timestamp")
+    df[TIME_COL] = pd.to_datetime(df[TIME_COL], errors="coerce")
+    df = df.dropna(subset=[TIME_COL]).sort_values(TIME_COL)
+
+    df = df.set_index(TIME_COL)
     for col in NUMERIC_SENSORS:
-        df[col] = df[col].interpolate(method="time").ffill().bfill()
+        if col in df.columns:
+            df[col] = df[col].interpolate(method="time").ffill().bfill()
     df = df.reset_index()
 
     return df
@@ -57,15 +92,24 @@ def clean_and_impute(df: pd.DataFrame) -> pd.DataFrame:
 
 def rolling_window_eda(df: pd.DataFrame, window: int = 15) -> pd.DataFrame:
     """Multi-variable rolling window statistical EDA: rolling mean, std,
-    z-score per sensor, plus rolling cross-correlation between two key
-    variables as an example of multi-variable analysis.
+    z-score per numeric sensor, plus rolling cross-correlation between
+    runtime and daily machine ratio.
     """
-    out = df[["timestamp"]].copy()
+    out = pd.DataFrame({
+        "timestamp": pd.to_datetime(df[TIME_COL], errors="coerce"),
+    })
     for col in NUMERIC_SENSORS:
+        if col not in df.columns:
+            continue
         roll = df[col].rolling(window=window, min_periods=3)
         out[f"{col}_roll_mean"] = roll.mean()
         out[f"{col}_roll_std"] = roll.std()
         out[f"{col}_zscore"] = (df[col] - out[f"{col}_roll_mean"]) / out[f"{col}_roll_std"].replace(0, np.nan)
 
-    out["temp_vibration_roll_corr"] = df["temperature"].rolling(window=window, min_periods=3).corr(df["vibration"])
+    if all(c in df.columns for c in ("RUNTIME_SEC", "DAILY_MC_RATIO")):
+        out["runtime_ratio_roll_corr"] = (
+            df["RUNTIME_SEC"]
+            .rolling(window=window, min_periods=3)
+            .corr(df["DAILY_MC_RATIO"])
+        )
     return out

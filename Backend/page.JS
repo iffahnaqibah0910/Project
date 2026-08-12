@@ -6,7 +6,7 @@ import MissingnessPanel from "../components/MissingnessPanel";
 import RollingChart from "../components/RollingChart";
 import AlertFeed from "../components/AlertFeed";
 
-const SENSORS = ["temperature", "pressure", "vibration", "rpm"];
+const SENSORS = ["MACHCODE", "WKDATE", "MACHNAME", "RUNTIME_SEC", "RUNTIME_HOUR", "DAILY_MC_RATIO", "FACTORY"];
 
 export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);

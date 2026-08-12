@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.pyc
+.env
+Backend/.env
 
 # Next.js
 .next/

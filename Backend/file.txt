@@ -4,3 +4,6 @@ pandas
 numpy
 python-multipart
 websockets
+sqlalchemy
+pyodbc
+python-dotenv

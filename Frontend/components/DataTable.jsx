@@ -5,24 +5,26 @@ import { useState } from "react";
 const PAGE_SIZE = 15;
 
 const COLUMNS = [
-  { key: "timestamp", label: "Timestamp" },
-  { key: "temperature", label: "Temp" },
-  { key: "pressure", label: "Pressure" },
-  { key: "vibration", label: "Vibration" },
-  { key: "rpm", label: "RPM" },
-  { key: "machine_state", label: "State" },
+  { key: "WKDATE", label: "Work Date" },
+  { key: "MACHCODE", label: "Machine Code" },
+  { key: "MACHNAME", label: "Machine Name" },
+  { key: "RUNTIME_SEC", label: "Runtime (sec)" },
+  { key: "RUNTIME_HOUR", label: "Runtime (hours)" },
+  { key: "DAILY_MC_RATIO", label: "Daily MC Ratio" },
+  { key: "FACTORY", label: "Factory" },
 ];
 
 function formatValue(key, value) {
   if (value == null) return "—";
-  if (key === "timestamp") {
+  if (key === "WKDATE" || key === "timestamp") {
     const d = new Date(value);
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+      });
+    }
   }
   if (typeof value === "number") return value.toFixed(2);
   return String(value);

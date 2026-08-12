@@ -1,12 +1,12 @@
 import asyncio
 import json
 import time
+import traceback
 
 import pandas as pd
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from datasource import get_raw_data
 from processing import (
@@ -30,6 +30,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Return JSON errors with CORS so the browser shows the real failure
+    instead of a generic 'Failed to fetch'."""
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={"Access-Control-Allow-Origin": "http://localhost:3000"},
+    )
 
 
 def _records(df: pd.DataFrame):
