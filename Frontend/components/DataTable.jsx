@@ -14,24 +14,53 @@ const COLUMNS = [
   { key: "FACTORY", label: "Factory" },
 ];
 
+function formatWorkDate(value) {
+  if (value == null || value === "") return "—";
+  const s = String(value).trim();
+
+  // Raw SQL WKDATE: "20260810"
+  if (/^\d{8}$/.test(s)) {
+    const y = s.slice(0, 4);
+    const m = s.slice(4, 6);
+    const d = s.slice(6, 8);
+    return formatYmd(y, m, d);
+  }
+
+  // ISO date or datetime from API: "2026-08-10" / "2026-08-10T00:00:00"
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return formatYmd(iso[1], iso[2], iso[3]);
+
+  const dt = new Date(s);
+  if (!Number.isNaN(dt.getTime())) {
+    return dt.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+    });
+  }
+  return s;
+}
+
+function formatYmd(y, m, d) {
+  const dt = new Date(Number(y), Number(m) - 1, Number(d));
+  return dt.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+}
+
 function formatValue(key, value) {
   if (value == null) return "—";
-  if (key === "WKDATE" || key === "timestamp") {
-    const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-      });
-    }
-  }
+  if (key === "WKDATE") return formatWorkDate(value);
+  if (key === "timestamp") return formatWorkDate(value);
   if (typeof value === "number") return value.toFixed(2);
   return String(value);
 }
 
 export default function DataTable({ data }) {
   const [page, setPage] = useState(0);
+  const [jumpInput, setJumpInput] = useState("");
 
   if (!data) {
     return (
@@ -46,14 +75,25 @@ export default function DataTable({ data }) {
   }
 
   const totalPages = Math.max(1, Math.ceil(data.length / PAGE_SIZE));
-  const start = page * PAGE_SIZE;
+  const safePage = Math.min(page, totalPages - 1);
+  const start = safePage * PAGE_SIZE;
   const rows = data.slice(start, start + PAGE_SIZE);
+
+  function goToPage(raw) {
+    const n = Number.parseInt(String(raw).trim(), 10);
+    if (!Number.isFinite(n)) {
+      setJumpInput("");
+      return;
+    }
+    const clamped = Math.min(totalPages, Math.max(1, n));
+    setPage(clamped - 1);
+    setJumpInput("");
+  }
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <span className="eyebrow">Cleaned Data</span>
-        <h3>Sensor Readings</h3>
+        <h3> Data Table </h3>
         <span className="count">{data.length} rows total</span>
       </div>
 
@@ -81,18 +121,37 @@ export default function DataTable({ data }) {
       </div>
 
       <div className="pager">
-        <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+        <button disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
           ← Prev
         </button>
         <span className="page-label">
-          Page {page + 1} of {totalPages}
+          Page {safePage + 1} of {totalPages}
         </span>
         <button
-          disabled={page >= totalPages - 1}
+          disabled={safePage >= totalPages - 1}
           onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
         >
           Next →
         </button>
+        <label className="jump">
+          <span>Jump to</span>
+          <input
+            type="number"
+            min={1}
+            max={totalPages}
+            inputMode="numeric"
+            placeholder={String(safePage + 1)}
+            value={jumpInput}
+            onChange={(e) => setJumpInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") goToPage(jumpInput);
+            }}
+            aria-label="Jump to page"
+          />
+          <button type="button" onClick={() => goToPage(jumpInput)} disabled={!jumpInput.trim()}>
+            Go
+          </button>
+        </label>
       </div>
 
       <style jsx>{`
@@ -157,6 +216,7 @@ export default function DataTable({ data }) {
           display: flex;
           align-items: center;
           justify-content: center;
+          flex-wrap: wrap;
           gap: 16px;
           margin-top: 14px;
         }
@@ -181,6 +241,36 @@ export default function DataTable({ data }) {
           font-family: var(--mono);
           font-size: 12px;
           color: var(--text-dim);
+        }
+        .jump {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-family: var(--mono);
+          font-size: 12px;
+          color: var(--text-dim);
+        }
+        .jump input {
+          width: 64px;
+          background: var(--panel-raised);
+          border: 1px solid var(--line);
+          color: var(--text-primary);
+          border-radius: 4px;
+          padding: 6px 8px;
+          font-family: var(--mono);
+          font-size: 12px;
+        }
+        .jump input:focus {
+          outline: none;
+          border-color: var(--amber);
+        }
+        .jump input::-webkit-outer-spin-button,
+        .jump input::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        .jump input[type="number"] {
+          -moz-appearance: textfield;
         }
       `}</style>
     </div>

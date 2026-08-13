@@ -5,29 +5,39 @@ import { fetchJSON } from "../lib/api";
 import MissingnessPanel from "../components/MissingnessPanel";
 import RollingChart from "../components/RollingChart";
 import AlertFeed from "../components/AlertFeed";
+import DataTable from "../components/DataTable";
 
-const SENSORS = ["MACHCODE", "WKDATE", "MACHNAME", "RUNTIME_SEC", "RUNTIME_HOUR", "DAILY_MC_RATIO", "FACTORY"];
+const SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"];
 
 export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);
   const [eda, setEda] = useState(null);
-  const [sensor, setSensor] = useState("temperature");
+  const [tableData, setTableData] = useState(null);
+  const [sensor, setSensor] = useState("RUNTIME_SEC");
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    const ac = new AbortController();
+
     async function load() {
       try {
-        const [mp, edaData] = await Promise.all([
-          fetchJSON("/api/missingness"),
-          fetchJSON("/api/eda"),
+        setError(null);
+        const [mp, edaData, rawData] = await Promise.all([
+          fetchJSON("/api/missingness", { signal: ac.signal }),
+          fetchJSON("/api/eda", { signal: ac.signal }),
+          fetchJSON("/api/data", { signal: ac.signal }),
         ]);
+        if (ac.signal.aborted) return;
         setMissingness(mp);
         setEda(edaData);
+        setTableData(rawData);
       } catch (e) {
-        setError(e.message);
+        if (ac.signal.aborted || e.name === "AbortError") return;
+        setError(e.message || "Failed to fetch");
       }
     }
     load();
+    return () => ac.abort();
   }, []);
 
   return (
@@ -53,16 +63,24 @@ export default function Dashboard() {
       {error && <p className="error">Couldn't reach the backend — is it running on :8000? ({error})</p>}
 
       <div className="grid">
+        <div className="missingness-slot">
+          <MissingnessPanel missingness={missingness} />
+        </div>
+
+         <div className="table-slot">
+          <DataTable data={tableData} />
+        </div>
+
         <section className="chart-panel">
           <div className="panel-head">
-            <span className="eyebrow">Phase 2</span>
-            <h3>Rolling window EDA — {sensor}</h3>
+            <h3>Rolling window Exploratory Data Analysis — {sensor}</h3>
           </div>
           <RollingChart eda={eda} sensor={sensor} />
         </section>
 
-        <MissingnessPanel missingness={missingness} />
-        <AlertFeed />
+        <div className="alerts-slot">
+          <AlertFeed />
+        </div>
       </div>
 
       <style jsx>{`
@@ -72,10 +90,12 @@ export default function Dashboard() {
           max-width: 1200px;
           margin: 0 auto;
         }
-        .topbar {
+       .topbar {
           display: flex;
-          justify-content: space-between;
-          align-items: flex-end;
+          flex-direction: column;
+          align-items: center;
+          text-align: center;
+          gap: 16px;
           margin-bottom: 28px;
           border-bottom: 1px solid var(--line);
           padding-bottom: 20px;
@@ -107,12 +127,13 @@ export default function Dashboard() {
         }
         .grid {
           display: grid;
-          grid-template-columns: 2fr 1fr;
+          grid-template-columns: 1fr;
           gap: 20px;
         }
+        .missingness-slot, .alerts-slot {
+          width: 100%;
+        }
         .chart-panel {
-          grid-column: 1 / 2;
-          grid-row: 1 / 3;
           background: var(--panel);
           border: 1px solid var(--line);
           border-radius: 6px;
@@ -128,10 +149,6 @@ export default function Dashboard() {
           border-radius: 6px;
           font-size: 13px;
           margin-bottom: 20px;
-        }
-        @media (max-width: 900px) {
-          .grid { grid-template-columns: 1fr; }
-          .chart-panel { grid-column: 1; grid-row: auto; }
         }
       `}</style>
     </main>

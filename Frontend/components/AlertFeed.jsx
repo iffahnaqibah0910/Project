@@ -10,30 +10,42 @@ export default function AlertFeed() {
   const wsRef = useRef(null);
 
   useEffect(() => {
+    let closed = false;
     const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
+    ws.onopen = () => {
+      if (!closed) setConnected(true);
+    };
+    ws.onclose = () => {
+      if (!closed) setConnected(false);
+    };
     ws.onmessage = (event) => {
+      if (closed) return;
       const payload = JSON.parse(event.data);
       setLatency(payload.diagnostic_latency_ms);
       setAlerts(payload.alerts.slice().reverse());
     };
 
-    return () => ws.close();
+    return () => {
+      closed = true;
+      wsRef.current = null;
+      // Close only if still connecting/open — avoids noisy errors on Strict Mode remount.
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
   }, []);
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <span className="eyebrow">Phase 4 · Live</span>
         <h3>
           Alert Stream
           <span className={`dot ${connected ? "on" : "off"}`} />
         </h3>
         {latency != null && (
-          <span className="latency">diagnostic latency: {latency}ms</span>
+          <span className="latency">Diagnostic Latency: {latency}ms</span>
         )}
       </div>
 

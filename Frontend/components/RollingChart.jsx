@@ -20,7 +20,7 @@ const AMBER = "#e0a640";
 const GREEN = "#5fae7d";
 const DIM = "#8ba39b";
 
-export default function RollingChart({ eda, sensor = "MACHCODE" }) {
+export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
   if (!eda || eda.length === 0) return <div className="chart-empty">Loading EDA…</div>;
 
   const labels = eda.map((d) => d.timestamp);

@@ -1,8 +1,14 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
-export const WS_BASE = process.env.NEXT_PUBLIC_WS_BASE || "ws://localhost:8000";
+// Browser calls same-origin /api/* (proxied by next.config.js rewrites).
+// Direct backend URL is only used when NEXT_PUBLIC_API_BASE is set.
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
+export const WS_BASE =
+  process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8000";
 
-export async function fetchJSON(path) {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+export async function fetchJSON(path, options = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
+    ...options,
+  });
   if (!res.ok) {
     let detail = `Request failed: ${path}`;
     try {

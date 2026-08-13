@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse, Response
 from datasource import get_raw_data
 from processing import (
     calculate_missingness,
-    clean_and_impute,
     detect_schema_violations,
     rolling_window_eda,
 )
@@ -46,24 +45,44 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 def _records(df: pd.DataFrame):
     """Convert a DataFrame to plain-Python JSON records, letting pandas'
-    own encoder handle numpy dtypes and timestamps instead of FastAPI's."""
-    return json.loads(df.to_json(orient="records", date_format="iso"))
+    own encoder handle numpy dtypes and timestamps instead of FastAPI's.
+    WKDATE is emitted as YYYY-MM-DD so the UI shows work date, not insert time.
+    """
+    out = df.copy()
+    if "WKDATE" in out.columns:
+        out["WKDATE"] = pd.to_datetime(out["WKDATE"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return json.loads(out.to_json(orient="records", date_format="iso"))
+
+
+# Short TTL so /api/data + /api/eda + /api/missingness + ws ticks share one
+# SQL round-trip instead of stampeding the DB and blocking the event loop.
+_PIPELINE_TTL_SEC = 3.0
+_pipeline_cache: dict = {"ts": 0.0, "result": None}
 
 
 def _pipeline():
-    """Runs Phase 1 + Phase 2 + Phase 4 end to end on the current data."""
+    """Runs Phase 1 + Phase 2 + Phase 4 on raw (unimputed) data so missing
+    values and errors stay visible for detection.
+    """
+    now = time.time()
+    cached = _pipeline_cache["result"]
+    if cached is not None and (now - _pipeline_cache["ts"]) < _PIPELINE_TTL_SEC:
+        return cached
+
     raw = get_raw_data()
     schema_violations = detect_schema_violations(raw)
     mp = calculate_missingness(raw)
-    cleaned = clean_and_impute(raw)
-    eda = rolling_window_eda(cleaned)
+    eda = rolling_window_eda(raw)
 
     alerts = (
-        apply_rule_engine(eda)
-        + check_state_contradictions(cleaned)
+        apply_rule_engine(raw)
+        + check_state_contradictions(raw)
         + missingness_alerts(mp)
     )
-    return raw, cleaned, eda, schema_violations, mp, alerts
+    result = (raw, eda, schema_violations, mp, alerts)
+    _pipeline_cache["ts"] = now
+    _pipeline_cache["result"] = result
+    return result
 
 
 @app.get("/api/health")
@@ -73,9 +92,11 @@ def health():
 
 @app.get("/api/data")
 def get_data():
-    """Cleaned + imputed data, ready to chart."""
-    _, cleaned, _, _, _, _ = _pipeline()
-    return _records(cleaned)
+    """Raw source rows (errors/missing intact). Newest WKDATE first."""
+    raw, *_ = _pipeline()
+    if "WKDATE" in raw.columns:
+        raw = raw.sort_values("WKDATE", ascending=False)
+    return _records(raw)
 
 
 @app.get("/api/missingness")
@@ -89,9 +110,9 @@ def get_missingness():
 
 @app.get("/api/eda")
 def get_eda():
-    """Phase 2: rolling window statistical EDA."""
-    _, cleaned, eda, _, _, _ = _pipeline()
-    return _records(eda.fillna(0))
+    """Phase 2: rolling window statistical EDA on raw (unimputed) data."""
+    _, eda, *_ = _pipeline()
+    return _records(eda)
 
 
 @app.get("/api/alerts")
@@ -106,12 +127,16 @@ async def websocket_alerts(websocket: WebSocket):
     """Phase 4: live alert stream. Each message carries a server timestamp
     and a computed diagnostic_latency_ms so the frontend can display/measure
     detection-to-delivery latency.
+
+    Pipeline work is sync (SQL + pandas) — run it in a thread so it cannot
+    freeze the asyncio loop (which previously caused proxy ECONNRESET /
+    'socket hang up' on /api/* while alert sockets were open).
     """
     await websocket.accept()
     try:
         while True:
             t0 = time.perf_counter()
-            *_ , alerts = _pipeline()
+            *_, alerts = await asyncio.to_thread(_pipeline)
             latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
             await websocket.send_json({
@@ -123,4 +148,6 @@ async def websocket_alerts(websocket: WebSocket):
             await asyncio.sleep(5)  # simulate a new stream tick every 5s
     except WebSocketDisconnect:
         pass
-    
+    except Exception:
+        # Client gone mid-send ("socket.send() raised exception") — exit cleanly.
+        traceback.print_exc()

@@ -66,50 +66,48 @@ def calculate_missingness(df: pd.DataFrame) -> dict:
     return mp
 
 
-def clean_and_impute(df: pd.DataFrame) -> pd.DataFrame:
-    """Deterministic imputation for numeric sensors: coerce bad types to NaN,
-    then time-based interpolate / ffill / bfill using WKDATE as the index.
+def prepare_for_eda(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort and coerce types for rolling stats only. Does not impute or
+    repair values — missing/invalid numeric fields stay as NaN so errors
+    remain visible to the detection dashboard.
     """
-    df = df.copy()
-    for col in NUMERIC_SENSORS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if TIME_COL not in df.columns:
+    out = df.copy()
+    if TIME_COL not in out.columns:
         raise KeyError(f"Expected time column '{TIME_COL}' in dataframe")
 
-    df[TIME_COL] = pd.to_datetime(df[TIME_COL], errors="coerce")
-    df = df.dropna(subset=[TIME_COL]).sort_values(TIME_COL)
+    # WKDATE is stored as YYYYMMDD (e.g. "20260810").
+    out[TIME_COL] = pd.to_datetime(out[TIME_COL], format="%Y%m%d", errors="coerce")
+    out = out.dropna(subset=[TIME_COL]).sort_values(TIME_COL)
 
-    df = df.set_index(TIME_COL)
     for col in NUMERIC_SENSORS:
-        if col in df.columns:
-            df[col] = df[col].interpolate(method="time").ffill().bfill()
-    df = df.reset_index()
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
 
-    return df
+    return out
 
 
 def rolling_window_eda(df: pd.DataFrame, window: int = 15) -> pd.DataFrame:
-    """Multi-variable rolling window statistical EDA: rolling mean, std,
-    z-score per numeric sensor, plus rolling cross-correlation between
-    runtime and daily machine ratio.
+    """Multi-variable rolling window statistical EDA on raw (unimputed) data:
+    rolling mean, std, z-score per numeric sensor, plus rolling
+    cross-correlation between runtime and daily machine ratio.
+    NaNs from missing/invalid values are preserved in the calculations.
     """
+    work = prepare_for_eda(df)
     out = pd.DataFrame({
-        "timestamp": pd.to_datetime(df[TIME_COL], errors="coerce"),
+        "timestamp": work[TIME_COL],
     })
     for col in NUMERIC_SENSORS:
-        if col not in df.columns:
+        if col not in work.columns:
             continue
-        roll = df[col].rolling(window=window, min_periods=3)
+        roll = work[col].rolling(window=window, min_periods=3)
         out[f"{col}_roll_mean"] = roll.mean()
         out[f"{col}_roll_std"] = roll.std()
-        out[f"{col}_zscore"] = (df[col] - out[f"{col}_roll_mean"]) / out[f"{col}_roll_std"].replace(0, np.nan)
+        out[f"{col}_zscore"] = (work[col] - out[f"{col}_roll_mean"]) / out[f"{col}_roll_std"].replace(0, np.nan)
 
-    if all(c in df.columns for c in ("RUNTIME_SEC", "DAILY_MC_RATIO")):
+    if all(c in work.columns for c in ("RUNTIME_SEC", "DAILY_MC_RATIO")):
         out["runtime_ratio_roll_corr"] = (
-            df["RUNTIME_SEC"]
+            work["RUNTIME_SEC"]
             .rolling(window=window, min_periods=3)
-            .corr(df["DAILY_MC_RATIO"])
+            .corr(work["DAILY_MC_RATIO"])
         )
     return out

@@ -1,37 +1,38 @@
 """
-Phase 4: algorithmic rule engine + plausibility checks that turn the
-Phase 2 rolling stats into concrete alerts, plus the corrective-action
-lookup dictionary from Phase 3.
+Phase 4: algorithmic rule engine + plausibility checks that turn
+raw (unimputed) sensor values into concrete alerts, plus the
+corrective-action lookup dictionary from Phase 3.
 """
 import pandas as pd
 
-Z_THRESHOLD = 3.0
-NUMERIC_SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"]
+MC_RATIO_THRESHOLD = 100.0
 
 CORRECTIVE_ACTIONS = {
-    "z_score_spike": "Check sensor wiring/calibration; compare against adjacent machines for drift vs. fault.",
+    "abnormal_daily_mc_ratio": "DAILY_MC_RATIO exceeds 100 — review machine utilization summary and source calculation.",
     "runtime_ratio_mismatch": "RUNTIME_SEC and DAILY_MC_RATIO disagree — verify daily summary calculation and machine clock.",
     "high_missingness": "Missingness above threshold — check network link or ETL feed for the affected field.",
 }
 
 
-def apply_rule_engine(eda_df: pd.DataFrame) -> list[dict]:
-    """Threshold/z-score based anomaly rules on numeric MRR sensors."""
+def apply_rule_engine(df: pd.DataFrame) -> list[dict]:
+    """Flag abnormal DAILY_MC_RATIO values above the hard threshold."""
     alerts = []
-    for col in NUMERIC_SENSORS:
-        z_col = f"{col}_zscore"
-        if z_col not in eda_df:
-            continue
-        spikes = eda_df[eda_df[z_col].abs() > Z_THRESHOLD]
-        for _, row in spikes.iterrows():
-            ts = row["timestamp"] if "timestamp" in row else row.get("WKDATE")
-            alerts.append({
-                "timestamp": str(ts),
-                "type": "z_score_spike",
-                "sensor": col,
-                "z_score": round(float(row[z_col]), 2),
-                "corrective_action": CORRECTIVE_ACTIONS["z_score_spike"],
-            })
+    if "DAILY_MC_RATIO" not in df.columns:
+        return alerts
+
+    work = df.copy()
+    work["DAILY_MC_RATIO"] = pd.to_numeric(work["DAILY_MC_RATIO"], errors="coerce")
+    spikes = work[work["DAILY_MC_RATIO"] > MC_RATIO_THRESHOLD]
+
+    for _, row in spikes.iterrows():
+        ts = row["WKDATE"] if "WKDATE" in row else row.get("timestamp")
+        alerts.append({
+            "timestamp": str(ts),
+            "type": "abnormal_daily_mc_ratio",
+            "sensor": "DAILY_MC_RATIO",
+            "value": round(float(row["DAILY_MC_RATIO"]), 2),
+            "corrective_action": CORRECTIVE_ACTIONS["abnormal_daily_mc_ratio"],
+        })
     return alerts
 
 

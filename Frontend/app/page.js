@@ -17,21 +17,27 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    const ac = new AbortController();
+
     async function load() {
       try {
+        setError(null);
         const [mp, edaData, rawData] = await Promise.all([
-          fetchJSON("/api/missingness"),
-          fetchJSON("/api/eda"),
-          fetchJSON("/api/data"),
+          fetchJSON("/api/missingness", { signal: ac.signal }),
+          fetchJSON("/api/eda", { signal: ac.signal }),
+          fetchJSON("/api/data", { signal: ac.signal }),
         ]);
+        if (ac.signal.aborted) return;
         setMissingness(mp);
         setEda(edaData);
         setTableData(rawData);
       } catch (e) {
-        setError(e.message);
+        if (ac.signal.aborted || e.name === "AbortError") return;
+        setError(e.message || "Failed to fetch");
       }
     }
     load();
+    return () => ac.abort();
   }, []);
 
   return (
@@ -67,8 +73,7 @@ export default function Dashboard() {
 
         <section className="chart-panel">
           <div className="panel-head">
-            <span className="eyebrow">Phase 2</span>
-            <h3>Rolling window EDA — {sensor}</h3>
+            <h3>Time Series Chart of Exploratory Data Analysis — {sensor}</h3>
           </div>
           <RollingChart eda={eda} sensor={sensor} />
         </section>
