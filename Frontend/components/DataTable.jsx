@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { fetchJSON } from "../lib/api";
 
 const PAGE_SIZE = 15;
+const MC_RATIO_THRESHOLD = 100;
 
 const COLUMNS = [
   { key: "WKDATE", label: "Work Date" },
@@ -13,6 +15,28 @@ const COLUMNS = [
   { key: "DAILY_MC_RATIO", label: "Daily MC Ratio" },
   { key: "FACTORY", label: "Factory" },
 ];
+
+function isBlank(value) {
+  return value == null || (typeof value === "string" && value.trim() === "");
+}
+
+function isCellIssue(key, value) {
+  if (isBlank(value)) return "missing";
+  if (key === "DAILY_MC_RATIO") {
+    const n = typeof value === "number" ? value : Number(value);
+    if (Number.isFinite(n) && n > MC_RATIO_THRESHOLD) return "abnormal_ratio";
+  }
+  return null;
+}
+
+function rowIssues(row) {
+  const issues = {};
+  for (const col of COLUMNS) {
+    const kind = isCellIssue(col.key, row[col.key]);
+    if (kind) issues[col.key] = kind;
+  }
+  return issues;
+}
 
 function formatWorkDate(value) {
   if (value == null || value === "") return "—";
@@ -51,18 +75,73 @@ function formatYmd(y, m, d) {
 }
 
 function formatValue(key, value) {
-  if (value == null) return "—";
+  if (value == null || (typeof value === "string" && value.trim() === "")) return "—";
   if (key === "WKDATE") return formatWorkDate(value);
   if (key === "timestamp") return formatWorkDate(value);
   if (typeof value === "number") return value.toFixed(2);
   return String(value);
 }
 
-export default function DataTable({ data }) {
-  const [page, setPage] = useState(0);
+export default function DataTable() {
+  const [page, setPage] = useState(1); // 1-based, matches API
   const [jumpInput, setJumpInput] = useState("");
+  const [rows, setRows] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  if (!data) {
+  useEffect(() => {
+    const ac = new AbortController();
+
+    async function loadPage() {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await fetchJSON(
+          `/api/data?page=${page}&page_size=${PAGE_SIZE}`,
+          { signal: ac.signal },
+        );
+        if (ac.signal.aborted) return;
+        setRows(data.rows);
+        setTotal(data.total);
+        setTotalPages(Math.max(1, data.total_pages));
+        // Clamp if the server reports fewer pages than requested
+        if (page > data.total_pages && data.total_pages >= 1) {
+          setPage(data.total_pages);
+        }
+      } catch (e) {
+        if (ac.signal.aborted || e.name === "AbortError") return;
+        setError(e.message || "Failed to load table");
+        setRows([]);
+      } finally {
+        if (!ac.signal.aborted) setLoading(false);
+      }
+    }
+
+    loadPage();
+    return () => ac.abort();
+  }, [page]);
+
+  const annotated = useMemo(
+    () => (rows || []).map((row) => ({ row, issues: rowIssues(row) })),
+    [rows],
+  );
+
+  const issueCount = annotated.filter(({ issues }) => Object.keys(issues).length > 0).length;
+
+  function goToPage(raw) {
+    const n = Number.parseInt(String(raw).trim(), 10);
+    if (!Number.isFinite(n)) {
+      setJumpInput("");
+      return;
+    }
+    const clamped = Math.min(totalPages, Math.max(1, n));
+    setPage(clamped);
+    setJumpInput("");
+  }
+
+  if (rows == null && loading) {
     return (
       <div className="panel">
         <p className="empty">Loading data…</p>
@@ -74,30 +153,19 @@ export default function DataTable({ data }) {
     );
   }
 
-  const totalPages = Math.max(1, Math.ceil(data.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages - 1);
-  const start = safePage * PAGE_SIZE;
-  const rows = data.slice(start, start + PAGE_SIZE);
-
-  function goToPage(raw) {
-    const n = Number.parseInt(String(raw).trim(), 10);
-    if (!Number.isFinite(n)) {
-      setJumpInput("");
-      return;
-    }
-    const clamped = Math.min(totalPages, Math.max(1, n));
-    setPage(clamped - 1);
-    setJumpInput("");
-  }
-
   return (
     <div className="panel">
       <div className="panel-head">
         <h3> Data Table </h3>
-        <span className="count">{data.length} rows total</span>
+        <span className="count">
+          {total} rows total
+          {issueCount > 0 ? ` · ${issueCount} flagged on this page` : ""}
+        </span>
       </div>
 
-      <div className="table-wrap">
+      {error && <p className="table-error">{error}</p>}
+
+      <div className={`table-wrap${loading ? " is-loading" : ""}`}>
         <table>
           <thead>
             <tr>
@@ -107,29 +175,45 @@ export default function DataTable({ data }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
-              <tr key={start + i}>
-                {COLUMNS.map((col) => (
-                  <td key={col.key} className={col.key === "machine_state" ? `state state-${row[col.key]}` : ""}>
-                    {formatValue(col.key, row[col.key])}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {annotated.map(({ row, issues }, i) => {
+              const rowBad = Object.keys(issues).length > 0;
+              return (
+                <tr key={`${page}-${i}`} className={rowBad ? "row-flagged" : undefined}>
+                  {COLUMNS.map((col) => {
+                    const kind = issues[col.key];
+                    return (
+                      <td
+                        key={col.key}
+                        className={kind ? `cell-flagged cell-${kind}` : undefined}
+                        title={
+                          kind === "missing"
+                            ? "Missing value"
+                            : kind === "abnormal_ratio"
+                              ? `DAILY_MC_RATIO > ${MC_RATIO_THRESHOLD}`
+                              : undefined
+                        }
+                      >
+                        {formatValue(col.key, row[col.key])}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       <div className="pager">
-        <button disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+        <button disabled={page <= 1 || loading} onClick={() => setPage((p) => Math.max(1, p - 1))}>
           ← Prev
         </button>
         <span className="page-label">
-          Page {safePage + 1} of {totalPages}
+          Page {page} of {totalPages}
         </span>
         <button
-          disabled={safePage >= totalPages - 1}
-          onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+          disabled={page >= totalPages || loading}
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
         >
           Next →
         </button>
@@ -140,7 +224,7 @@ export default function DataTable({ data }) {
             min={1}
             max={totalPages}
             inputMode="numeric"
-            placeholder={String(safePage + 1)}
+            placeholder={String(page)}
             value={jumpInput}
             onChange={(e) => setJumpInput(e.target.value)}
             onKeyDown={(e) => {
@@ -148,7 +232,7 @@ export default function DataTable({ data }) {
             }}
             aria-label="Jump to page"
           />
-          <button type="button" onClick={() => goToPage(jumpInput)} disabled={!jumpInput.trim()}>
+          <button type="button" onClick={() => goToPage(jumpInput)} disabled={!jumpInput.trim() || loading}>
             Go
           </button>
         </label>
@@ -162,13 +246,6 @@ export default function DataTable({ data }) {
           padding: 20px;
         }
         .panel-head { margin-bottom: 14px; position: relative; }
-        .eyebrow {
-          font-family: var(--mono);
-          font-size: 11px;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          color: var(--amber);
-        }
         h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
         .count {
           position: absolute;
@@ -178,11 +255,17 @@ export default function DataTable({ data }) {
           font-size: 11px;
           color: var(--text-dim);
         }
+        .table-error {
+          color: var(--alert-red);
+          font-size: 13px;
+          margin: 0 0 10px;
+        }
         .table-wrap {
           overflow-x: auto;
           border: 1px solid var(--line);
           border-radius: 4px;
         }
+        .table-wrap.is-loading { opacity: 0.55; }
         table {
           width: 100%;
           border-collapse: collapse;
@@ -209,9 +292,17 @@ export default function DataTable({ data }) {
         }
         tbody tr:last-child td { border-bottom: none; }
         tbody tr:hover { background: var(--panel-raised); }
-        .state-running { color: var(--ok-green); }
-        .state-stopped { color: var(--alert-red); }
-        .state-idle { color: var(--amber); }
+        tbody tr.row-flagged {
+          background: rgba(217, 96, 79, 0.08);
+        }
+        tbody tr.row-flagged:hover {
+          background: rgba(217, 96, 79, 0.14);
+        }
+        tbody td.cell-flagged {
+          color: var(--alert-red);
+          font-weight: 600;
+          background: rgba(217, 96, 79, 0.16);
+        }
         .pager {
           display: flex;
           align-items: center;
@@ -272,6 +363,7 @@ export default function DataTable({ data }) {
         .jump input[type="number"] {
           -moz-appearance: textfield;
         }
+        .empty { font-size: 13px; color: var(--text-dim); margin: 0; }
       `}</style>
     </div>
   );

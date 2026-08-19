@@ -1,20 +1,23 @@
 import asyncio
 import json
+import threading
 import time
 import traceback
 
 import pandas as pd
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from datasource import get_raw_data
+from datasource import get_anomaly_rows, get_data_page, get_full_missingness, get_raw_data
 from processing import (
-    calculate_missingness,
     detect_schema_violations,
     rolling_window_eda,
 )
-from rules import apply_rule_engine, check_state_contradictions, missingness_alerts
+from rules import (
+    apply_rule_engine,
+    missing_value_alerts,
+)
 
 app = FastAPI(title="Automated Error Missing Values Detection Dashboard API")
 
@@ -54,72 +57,126 @@ def _records(df: pd.DataFrame):
     return json.loads(out.to_json(orient="records", date_format="iso"))
 
 
-# Short TTL so /api/data + /api/eda + /api/missingness + ws ticks share one
-# SQL round-trip instead of stampeding the DB and blocking the event loop.
-_PIPELINE_TTL_SEC = 3.0
+# Longer TTL: SQL TOP 2000 can take several seconds over the network.
+# Sharing one snapshot across /api/* + ws ticks avoids stampeding the DB
+# and blocking uvicorn's single worker.
+_PIPELINE_TTL_SEC = 30.0
 _pipeline_cache: dict = {"ts": 0.0, "result": None}
+_pipeline_lock = threading.Lock()
 
 
 def _pipeline():
-    """Runs Phase 1 + Phase 2 + Phase 4 on raw (unimputed) data so missing
-    values and errors stay visible for detection.
+    """Runs Phase 1 + Phase 2 + Phase 4.
+
+    - EDA uses the recent TOP-N sample (fast chart payload).
+    - Missingness Mp is computed on the **full SQL table**.
+    - Alerts scan recent rows **plus** full-table anomaly rows so older
+      DAILY_MC_RATIO > 100 / NULL fields still appear in the stream.
     """
     now = time.time()
     cached = _pipeline_cache["result"]
     if cached is not None and (now - _pipeline_cache["ts"]) < _PIPELINE_TTL_SEC:
         return cached
 
-    raw = get_raw_data()
-    schema_violations = detect_schema_violations(raw)
-    mp = calculate_missingness(raw)
-    eda = rolling_window_eda(raw)
+    with _pipeline_lock:
+        now = time.time()
+        cached = _pipeline_cache["result"]
+        if cached is not None and (now - _pipeline_cache["ts"]) < _PIPELINE_TTL_SEC:
+            return cached
 
-    alerts = (
-        apply_rule_engine(raw)
-        + check_state_contradictions(raw)
-        + missingness_alerts(mp)
-    )
-    result = (raw, eda, schema_violations, mp, alerts)
-    _pipeline_cache["ts"] = now
-    _pipeline_cache["result"] = result
-    return result
+        recent = get_raw_data()
+        anomalies = get_anomaly_rows()
+        detection = (
+            pd.concat([recent, anomalies], ignore_index=True)
+            .drop_duplicates(subset=["MACHCODE", "WKDATE", "FACTORY"], keep="last")
+            .reset_index(drop=True)
+            if not anomalies.empty
+            else recent
+        )
+
+        mp, missing_counts, total_rows = get_full_missingness()
+        schema_violations = detect_schema_violations(
+            anomalies if not anomalies.empty else recent.head(0)
+        )
+        eda = rolling_window_eda(recent)
+
+        alerts = (
+            apply_rule_engine(detection)
+            + missing_value_alerts(anomalies if not anomalies.empty else recent.head(0))
+        )
+        result = (recent, eda, schema_violations, mp, alerts, missing_counts, total_rows)
+        _pipeline_cache["ts"] = now
+        _pipeline_cache["result"] = result
+        return result
+
+
+def _get_data_payload(page: int, page_size: int) -> dict:
+    raw, total = get_data_page(page=page, page_size=page_size)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    return {
+        "rows": _records(raw),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+def _get_missingness_payload() -> dict:
+    # result: recent, eda, schema_violations, mp, alerts, missing_counts, total_rows
+    _recent, _eda, schema_violations, mp, _alerts, missing_counts, total_rows = _pipeline()
+    return {
+        "missingness_pct": mp,
+        "missing_counts": missing_counts,
+        "total_rows": total_rows,
+        "schema_violations": schema_violations,
+    }
+
+
+def _get_eda_payload() -> list:
+    _recent, eda, *_ = _pipeline()
+    return _records(eda)
+
+
+def _get_alerts_payload() -> list:
+    # result: recent, eda, schema_violations, mp, alerts, missing_counts, total_rows
+    return _pipeline()[4]
 
 
 @app.get("/api/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
 @app.get("/api/data")
-def get_data():
-    """Raw source rows (errors/missing intact). Newest WKDATE first."""
-    raw, *_ = _pipeline()
-    if "WKDATE" in raw.columns:
-        raw = raw.sort_values("WKDATE", ascending=False)
-    return _records(raw)
+async def get_data(
+    page: int = Query(1, ge=1, description="1-based page index"),
+    page_size: int = Query(15, ge=1, le=200, description="Rows per page"),
+):
+    """Full-table page (errors/missing intact). Newest WKDATE first.
+
+    Returns { rows, total, page, page_size, total_pages } so the UI can
+    page through the entire SQL table without downloading it all at once.
+    """
+    return await asyncio.to_thread(_get_data_payload, page, page_size)
 
 
 @app.get("/api/missingness")
-def get_missingness():
+async def get_missingness():
     """Phase 1, Objective 1: exact Mp per sensor + schema violations found."""
-    raw = get_raw_data()
-    schema_violations = detect_schema_violations(raw)
-    mp = calculate_missingness(raw)
-    return {"missingness_pct": mp, "schema_violations": schema_violations}
+    return await asyncio.to_thread(_get_missingness_payload)
 
 
 @app.get("/api/eda")
-def get_eda():
+async def get_eda():
     """Phase 2: rolling window statistical EDA on raw (unimputed) data."""
-    _, eda, *_ = _pipeline()
-    return _records(eda)
+    return await asyncio.to_thread(_get_eda_payload)
 
 
 @app.get("/api/alerts")
-def get_alerts():
+async def get_alerts():
     """Phase 4: current alerts + corrective actions (snapshot, non-streaming)."""
-    *_, alerts = _pipeline()
-    return alerts
+    return await asyncio.to_thread(_get_alerts_payload)
 
 
 @app.websocket("/ws/alerts")
@@ -136,14 +193,20 @@ async def websocket_alerts(websocket: WebSocket):
     try:
         while True:
             t0 = time.perf_counter()
-            *_, alerts = await asyncio.to_thread(_pipeline)
+            result = await asyncio.to_thread(_pipeline)
+            # result: recent, eda, schema_violations, mp, alerts, missing_counts, total_rows
+            # Stream only row-level issues: missing_value + abnormal_daily_mc_ratio
+            alerts = [
+                a for a in result[4]
+                if a.get("type") in ("missing_value", "abnormal_daily_mc_ratio")
+            ]
             latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
             await websocket.send_json({
                 "server_time": time.time(),
                 "diagnostic_latency_ms": latency_ms,
                 "alert_count": len(alerts),
-                "alerts": alerts[-10:],  # most recent batch
+                "alerts": alerts[:15],
             })
             await asyncio.sleep(5)  # simulate a new stream tick every 5s
     except WebSocketDisconnect:

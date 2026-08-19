@@ -8,9 +8,9 @@ import pandas as pd
 MC_RATIO_THRESHOLD = 100.0
 
 CORRECTIVE_ACTIONS = {
-    "abnormal_daily_mc_ratio": "DAILY_MC_RATIO exceeds 100 — review machine utilization summary and source calculation.",
+    "abnormal_daily_mc_ratio": "DAILY_MC_RATIO exceeds 100.",
     "runtime_ratio_mismatch": "RUNTIME_SEC and DAILY_MC_RATIO disagree — verify daily summary calculation and machine clock.",
-    "high_missingness": "Missingness above threshold — check network link or ETL feed for the affected field.",
+    "missing_value": "Required field is null/blank.",
 }
 
 
@@ -26,8 +26,10 @@ def apply_rule_engine(df: pd.DataFrame) -> list[dict]:
 
     for _, row in spikes.iterrows():
         ts = row["WKDATE"] if "WKDATE" in row else row.get("timestamp")
+        machine = row["MACHCODE"] if "MACHCODE" in row and pd.notna(row["MACHCODE"]) else None
         alerts.append({
             "timestamp": str(ts),
+            "machine": None if machine is None else str(machine),
             "type": "abnormal_daily_mc_ratio",
             "sensor": "DAILY_MC_RATIO",
             "value": round(float(row["DAILY_MC_RATIO"]), 2),
@@ -53,8 +55,10 @@ def check_state_contradictions(raw_df: pd.DataFrame) -> list[dict]:
         | ((df["RUNTIME_SEC"].fillna(0) > 3600) & (df["DAILY_MC_RATIO"].fillna(0) < 0.5))
     ]
     for _, row in mismatches.iterrows():
+        machine = row["MACHCODE"] if "MACHCODE" in row and pd.notna(row["MACHCODE"]) else None
         alerts.append({
             "timestamp": str(row["WKDATE"]),
+            "machine": None if machine is None else str(machine),
             "type": "runtime_ratio_mismatch",
             "sensor": "DAILY_MC_RATIO",
             "value": float(row["DAILY_MC_RATIO"]) if pd.notna(row["DAILY_MC_RATIO"]) else None,
@@ -63,14 +67,42 @@ def check_state_contradictions(raw_df: pd.DataFrame) -> list[dict]:
     return alerts
 
 
-def missingness_alerts(mp: dict, threshold: float = 10.0) -> list[dict]:
+def missing_value_alerts(df: pd.DataFrame) -> list[dict]:
+    """One alert per null/blank cell so missing rows always appear in the stream."""
+    alerts = []
+    cols = [c for c in (
+        "MACHCODE", "WKDATE", "MACHNAME", "RUNTIME_SEC",
+        "RUNTIME_HOUR", "DAILY_MC_RATIO", "FACTORY",
+    ) if c in df.columns]
+    for _, row in df.iterrows():
+        machine = row["MACHCODE"] if "MACHCODE" in row and pd.notna(row["MACHCODE"]) else None
+        ts = row["WKDATE"] if "WKDATE" in row else None
+        for col in cols:
+            val = row[col]
+            is_missing = pd.isna(val) or (isinstance(val, str) and val.strip() == "")
+            if is_missing:
+                alerts.append({
+                    "timestamp": str(ts),
+                    "machine": None if machine is None else str(machine),
+                    "type": "missing_value",
+                    "sensor": col,
+                    "value": None,
+                    "corrective_action": CORRECTIVE_ACTIONS["missing_value"],
+                })
+    return alerts
+
+
+def missingness_alerts(mp: dict, threshold: float = 10.0, missing_counts: dict | None = None) -> list[dict]:
+    """Column-level missingness summary alerts (kept for Mp panel use; not streamed)."""
     alerts = []
     for sensor, pct in mp.items():
-        if pct > threshold:
+        count = None if missing_counts is None else int(missing_counts.get(sensor, 0))
+        if (count is not None and count > 0) or pct > threshold:
             alerts.append({
                 "type": "high_missingness",
                 "sensor": sensor,
                 "missingness_pct": pct,
+                "missing_count": count,
                 "corrective_action": CORRECTIVE_ACTIONS["high_missingness"],
             })
     return alerts

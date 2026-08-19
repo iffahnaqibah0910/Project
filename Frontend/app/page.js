@@ -12,31 +12,39 @@ const SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"];
 export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);
   const [eda, setEda] = useState(null);
-  const [tableData, setTableData] = useState(null);
   const [sensor, setSensor] = useState("RUNTIME_SEC");
   const [error, setError] = useState(null);
 
   useEffect(() => {
     const ac = new AbortController();
 
-    async function load() {
+    // Load independently — Promise.all previously hid missingness whenever
+    // the heavier /api/eda call failed or timed out through the Next proxy.
+    async function loadMissingness() {
       try {
-        setError(null);
-        const [mp, edaData, rawData] = await Promise.all([
-          fetchJSON("/api/missingness", { signal: ac.signal }),
-          fetchJSON("/api/eda", { signal: ac.signal }),
-          fetchJSON("/api/data", { signal: ac.signal }),
-        ]);
-        if (ac.signal.aborted) return;
-        setMissingness(mp);
-        setEda(edaData);
-        setTableData(rawData);
+        const mp = await fetchJSON("/api/missingness", { signal: ac.signal });
+        if (!ac.signal.aborted) setMissingness(mp);
       } catch (e) {
         if (ac.signal.aborted || e.name === "AbortError") return;
-        setError(e.message || "Failed to fetch");
+        setError((prev) => prev || e.message || "Failed to fetch missingness");
       }
     }
-    load();
+
+    async function loadEda() {
+      try {
+        const edaData = await fetchJSON("/api/eda", { signal: ac.signal });
+        if (!ac.signal.aborted) {
+          setEda(edaData);
+          setError(null);
+        }
+      } catch (e) {
+        if (ac.signal.aborted || e.name === "AbortError") return;
+        setError(e.message || "Failed to fetch EDA");
+      }
+    }
+
+    loadMissingness();
+    loadEda();
     return () => ac.abort();
   }, []);
 
@@ -60,15 +68,24 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {error && <p className="error">Couldn't reach the backend — is it running on :8000? ({error})</p>}
+      {error && (
+        <p className="error">
+          Backend request failed — check that the API on :8000 is healthy. ({error})
+        </p>
+      )}
 
-      <div className="grid">
+      <div className="top-row">
+        <aside className="sidebar">
+          <AlertFeed />
+        </aside>
         <div className="missingness-slot">
           <MissingnessPanel missingness={missingness} />
         </div>
+      </div>
 
-         <div className="table-slot">
-          <DataTable data={tableData} />
+      <div className="grid">
+        <div className="table-slot">
+          <DataTable />
         </div>
 
         <section className="chart-panel">
@@ -77,27 +94,23 @@ export default function Dashboard() {
           </div>
           <RollingChart eda={eda} sensor={sensor} />
         </section>
-
-        <div className="alerts-slot">
-          <AlertFeed />
-        </div>
       </div>
 
       <style jsx>{`
         .dashboard {
           min-height: 100vh;
           padding: 32px 40px 60px;
-          max-width: 1200px;
+          max-width: 1400px;
           margin: 0 auto;
         }
-       .topbar {
+        .topbar {
           display: flex;
           flex-direction: column;
           align-items: center;
           text-align: center;
           gap: 16px;
           margin-bottom: 28px;
-          border-bottom: 1px solid var(--line);
+          border-bottom: 5px solid var(--line);
           padding-bottom: 20px;
         }
         .eyebrow {
@@ -125,13 +138,24 @@ export default function Dashboard() {
           color: var(--amber);
           background: rgba(224,166,64,0.08);
         }
+        .top-row {
+          display: grid;
+          grid-template-columns: 380px minmax(0, 1fr);
+          gap: 20px;
+          align-items: stretch;
+          margin-bottom: 20px;
+        }
+        .sidebar {
+          min-width: 0;
+        }
+        .missingness-slot {
+          min-width: 0;
+        }
         .grid {
           display: grid;
           grid-template-columns: 1fr;
           gap: 20px;
-        }
-        .missingness-slot, .alerts-slot {
-          width: 100%;
+          min-width: 0;
         }
         .chart-panel {
           background: var(--panel);
@@ -149,6 +173,11 @@ export default function Dashboard() {
           border-radius: 6px;
           font-size: 13px;
           margin-bottom: 20px;
+        }
+        @media (max-width: 960px) {
+          .top-row {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </main>
