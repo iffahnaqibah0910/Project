@@ -16,36 +16,39 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const ac = new AbortController();
+    let cancelled = false;
 
     // Load independently — Promise.all previously hid missingness whenever
     // the heavier /api/eda call failed or timed out through the Next proxy.
+    // Use a cancelled flag (not AbortController) so React Strict Mode remounts
+    // don't abort the in-flight request and leave panels stuck on "Loading…".
     async function loadMissingness() {
       try {
-        const mp = await fetchJSON("/api/missingness", { signal: ac.signal });
-        if (!ac.signal.aborted) setMissingness(mp);
+        const mp = await fetchJSON("/api/missingness");
+        if (!cancelled) setMissingness(mp);
       } catch (e) {
-        if (ac.signal.aborted || e.name === "AbortError") return;
+        if (cancelled) return;
         setError((prev) => prev || e.message || "Failed to fetch missingness");
       }
     }
 
     async function loadEda() {
       try {
-        const edaData = await fetchJSON("/api/eda", { signal: ac.signal });
-        if (!ac.signal.aborted) {
+        const edaData = await fetchJSON("/api/eda");
+        if (!cancelled) {
           setEda(edaData);
-          setError(null);
         }
       } catch (e) {
-        if (ac.signal.aborted || e.name === "AbortError") return;
-        setError(e.message || "Failed to fetch EDA");
+        if (cancelled) return;
+        setError((prev) => prev || e.message || "Failed to fetch EDA");
       }
     }
 
     loadMissingness();
     loadEda();
-    return () => ac.abort();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
