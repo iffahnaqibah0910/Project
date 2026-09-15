@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { WS_BASE } from "../lib/api";
 
-export default function AlertFeed() {
+export default function AlertFeed({ factory = "" }) {
   const [alerts, setAlerts] = useState([]);
   const [latency, setLatency] = useState(null);
   const [connected, setConnected] = useState(false);
@@ -11,7 +11,8 @@ export default function AlertFeed() {
 
   useEffect(() => {
     let closed = false;
-    const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
+    const params = factory ? `?factory=${encodeURIComponent(factory)}` : "";
+    const ws = new WebSocket(`${WS_BASE}/ws/alerts${params}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -30,12 +31,14 @@ export default function AlertFeed() {
     return () => {
       closed = true;
       wsRef.current = null;
+      setAlerts([]);
+      setLatency(null);
       // Close only if still connecting/open — avoids noisy errors on Strict Mode remount.
       if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
     };
-  }, []);
+  }, [factory]);
 
   return (
     <div className="panel">
@@ -44,9 +47,10 @@ export default function AlertFeed() {
           Alert Stream
           <span className={`dot ${connected ? "on" : "off"}`} />
         </h3>
-        {latency != null && (
-          <span className="latency">Diagnostic Latency: {latency}ms</span>
-        )}
+        <span className="latency">
+          {latency != null ? `Diagnostic Latency: ${latency}ms · ` : ""}
+          {factory || "All factories"}
+        </span>
       </div>
 
       {alerts.length === 0 ? (
@@ -59,9 +63,10 @@ export default function AlertFeed() {
                 <span className="alert-type">{a.type.replaceAll("_", " ")}</span>
                 {a.sensor && <span className="alert-sensor">{a.sensor}</span>}
               </div>
-              {(a.machine || a.value != null || a.missingness_pct != null || a.missing_count != null) && (
+              {(a.machine || a.factory || a.value != null || a.missingness_pct != null || a.missing_count != null) && (
                 <p className="alert-meta">
                   {a.machine ? <span>{a.machine}</span> : null}
+                  {a.factory ? <span>{a.factory}</span> : null}
                   {a.value != null ? <span>value {a.value}</span> : null}
                   {a.missing_count != null ? <span>{a.missing_count} missing</span> : null}
                   {a.missingness_pct != null ? <span>{a.missingness_pct}%</span> : null}

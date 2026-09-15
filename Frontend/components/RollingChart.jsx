@@ -35,7 +35,8 @@ function timeUnitForSpan(timestamps) {
 }
 
 export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
-  if (!eda || eda.length === 0) return <div className="chart-empty">Loading EDA…</div>;
+  if (!eda) return <div className="chart-empty">Loading EDA…</div>;
+  if (eda.length === 0) return <div className="chart-empty">No chart data for this factory.</div>;
 
   const labels = eda.map((d) => d.timestamp);
   const mean = eda.map((d) => d[`${sensor}_roll_mean`]);

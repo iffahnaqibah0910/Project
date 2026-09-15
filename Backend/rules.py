@@ -14,6 +14,13 @@ CORRECTIVE_ACTIONS = {
 }
 
 
+def _row_factory(row) -> str | None:
+    if "FACTORY" not in row or pd.isna(row["FACTORY"]):
+        return None
+    value = str(row["FACTORY"]).strip()
+    return value or None
+
+
 def apply_rule_engine(df: pd.DataFrame) -> list[dict]:
     """Flag abnormal DAILY_MC_RATIO values above the hard threshold."""
     alerts = []
@@ -30,6 +37,7 @@ def apply_rule_engine(df: pd.DataFrame) -> list[dict]:
         alerts.append({
             "timestamp": str(ts),
             "machine": None if machine is None else str(machine),
+            "factory": _row_factory(row),
             "type": "abnormal_daily_mc_ratio",
             "sensor": "DAILY_MC_RATIO",
             "value": round(float(row["DAILY_MC_RATIO"]), 2),
@@ -59,6 +67,7 @@ def check_state_contradictions(raw_df: pd.DataFrame) -> list[dict]:
         alerts.append({
             "timestamp": str(row["WKDATE"]),
             "machine": None if machine is None else str(machine),
+            "factory": _row_factory(row),
             "type": "runtime_ratio_mismatch",
             "sensor": "DAILY_MC_RATIO",
             "value": float(row["DAILY_MC_RATIO"]) if pd.notna(row["DAILY_MC_RATIO"]) else None,
@@ -84,6 +93,7 @@ def missing_value_alerts(df: pd.DataFrame) -> list[dict]:
                 alerts.append({
                     "timestamp": str(ts),
                     "machine": None if machine is None else str(machine),
+                    "factory": _row_factory(row),
                     "type": "missing_value",
                     "sensor": col,
                     "value": None,

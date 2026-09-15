@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { fetchJSON } from "../lib/api";
+import { fetchJSON, withQuery } from "../lib/api";
 
 const PAGE_SIZE = 15;
 const MC_RATIO_THRESHOLD = 100;
@@ -82,7 +82,7 @@ function formatValue(key, value) {
   return String(value);
 }
 
-export default function DataTable() {
+export default function DataTable({ factory = "" }) {
   const [page, setPage] = useState(1); // 1-based, matches API
   const [jumpInput, setJumpInput] = useState("");
   const [rows, setRows] = useState(null);
@@ -92,6 +92,12 @@ export default function DataTable() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    setPage(1);
+    setRows(null);
+    setError(null);
+  }, [factory]);
+
+  useEffect(() => {
     const ac = new AbortController();
 
     async function loadPage() {
@@ -99,7 +105,7 @@ export default function DataTable() {
         setLoading(true);
         setError(null);
         const data = await fetchJSON(
-          `/api/data?page=${page}&page_size=${PAGE_SIZE}`,
+          withQuery("/api/data", { page, page_size: PAGE_SIZE, factory }),
           { signal: ac.signal },
         );
         if (ac.signal.aborted) return;
@@ -121,7 +127,7 @@ export default function DataTable() {
 
     loadPage();
     return () => ac.abort();
-  }, [page]);
+  }, [page, factory]);
 
   const annotated = useMemo(
     () => (rows || []).map((row) => ({ row, issues: rowIssues(row) })),
@@ -158,7 +164,7 @@ export default function DataTable() {
       <div className="panel-head">
         <h3> Data Table </h3>
         <span className="count">
-          {total} rows total
+          {factory ? factory : "All factories"} · {total} rows total
           {issueCount > 0 ? ` · ${issueCount} flagged on this page` : ""}
         </span>
       </div>

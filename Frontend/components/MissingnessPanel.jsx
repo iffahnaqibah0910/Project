@@ -1,6 +1,6 @@
 "use client";
 
-export default function MissingnessPanel({ missingness }) {
+export default function MissingnessPanel({ missingness, factory = "" }) {
   const {
     missingness_pct,
     missing_counts,
@@ -13,7 +13,9 @@ export default function MissingnessPanel({ missingness }) {
       <div className="panel-head">
         <h3>Missingness (Mp)</h3>
         {total_rows != null && (
-          <span className="meta">Full table · {total_rows.toLocaleString()} rows</span>
+          <span className="meta">
+            {factory || "All factories"} · {total_rows.toLocaleString()} rows
+          </span>
         )}
       </div>
 

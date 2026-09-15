@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchJSON } from "../lib/api";
+import { fetchJSON, withQuery } from "../lib/api";
 import MissingnessPanel from "../components/MissingnessPanel";
 import RollingChart from "../components/RollingChart";
 import AlertFeed from "../components/AlertFeed";
@@ -13,7 +13,28 @@ export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);
   const [eda, setEda] = useState(null);
   const [sensor, setSensor] = useState("RUNTIME_SEC");
+  const [factories, setFactories] = useState([]);
+  const [factory, setFactory] = useState("");
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFactories() {
+      try {
+        const data = await fetchJSON("/api/factories");
+        if (!cancelled) setFactories(data.factories || []);
+      } catch (e) {
+        if (cancelled) return;
+        setError((prev) => prev || e.message || "Failed to fetch factories");
+      }
+    }
+
+    loadFactories();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,7 +45,7 @@ export default function Dashboard() {
     // don't abort the in-flight request and leave panels stuck on "Loading…".
     async function loadMissingness() {
       try {
-        const mp = await fetchJSON("/api/missingness");
+        const mp = await fetchJSON(withQuery("/api/missingness", { factory }));
         if (!cancelled) setMissingness(mp);
       } catch (e) {
         if (cancelled) return;
@@ -34,7 +55,7 @@ export default function Dashboard() {
 
     async function loadEda() {
       try {
-        const edaData = await fetchJSON("/api/eda");
+        const edaData = await fetchJSON(withQuery("/api/eda", { factory }));
         if (!cancelled) {
           setEda(edaData);
         }
@@ -44,12 +65,16 @@ export default function Dashboard() {
       }
     }
 
+    setMissingness(null);
+    setEda(null);
     loadMissingness();
     loadEda();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [factory]);
+
+  const factoryLabel = factory || "All factories";
 
   return (
     <main className="dashboard">
@@ -58,16 +83,33 @@ export default function Dashboard() {
           <span className="eyebrow">Missing Values</span>
           <h1>Automated Error Of Missing Values Detection Dashboard For Machine Running Data Monitoring</h1>
         </div>
-        <div className="sensor-picker">
-          {SENSORS.map((s) => (
-            <button
-              key={s}
-              className={s === sensor ? "active" : ""}
-              onClick={() => setSensor(s)}
+        <div className="controls">
+          <label className="factory-picker">
+            <span>Factory</span>
+            <select
+              value={factory}
+              onChange={(e) => setFactory(e.target.value)}
+              aria-label="Choose factory"
             >
-              {s}
-            </button>
-          ))}
+              <option value="">All factories</option>
+              {factories.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="sensor-picker">
+            {SENSORS.map((s) => (
+              <button
+                key={s}
+                className={s === sensor ? "active" : ""}
+                onClick={() => setSensor(s)}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -79,21 +121,22 @@ export default function Dashboard() {
 
       <div className="top-row">
         <aside className="sidebar">
-          <AlertFeed />
+          <AlertFeed factory={factory} />
         </aside>
         <div className="missingness-slot">
-          <MissingnessPanel missingness={missingness} />
+          <MissingnessPanel missingness={missingness} factory={factory} />
         </div>
       </div>
 
       <div className="grid">
         <div className="table-slot">
-          <DataTable />
+          <DataTable factory={factory} />
         </div>
 
         <section className="chart-panel">
           <div className="panel-head">
             <h3>Time Series Chart of Exploratory Data Analysis — {sensor}</h3>
+            <span className="chart-scope">{factoryLabel}</span>
           </div>
           <RollingChart eda={eda} sensor={sensor} />
         </section>
@@ -124,6 +167,39 @@ export default function Dashboard() {
           color: var(--amber);
         }
         h1 { margin: 4px 0 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+        .controls {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: center;
+          gap: 14px;
+        }
+        .factory-picker {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-family: var(--mono);
+          font-size: 11px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--text-dim);
+        }
+        .factory-picker select {
+          background: var(--panel);
+          border: 1px solid var(--line);
+          color: var(--text-primary);
+          padding: 8px 12px;
+          border-radius: 4px;
+          font-size: 12px;
+          letter-spacing: 0;
+          text-transform: none;
+          cursor: pointer;
+          min-width: 180px;
+        }
+        .factory-picker select:focus {
+          outline: none;
+          border-color: var(--amber);
+        }
         .sensor-picker { display: flex; gap: 6px; }
         .sensor-picker button {
           background: var(--panel);
@@ -168,6 +244,13 @@ export default function Dashboard() {
         }
         .panel-head { margin-bottom: 14px; }
         .panel-head h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
+        .chart-scope {
+          display: block;
+          margin-top: 4px;
+          font-family: var(--mono);
+          font-size: 11px;
+          color: var(--text-dim);
+        }
         .error {
           background: rgba(217,96,79,0.1);
           border: 1px solid var(--alert-red);

@@ -30,19 +30,10 @@ DEFAULT_QUERY = (
 
 COUNT_QUERY = f"SELECT COUNT(*) AS n FROM {TABLE}"
 
-PAGE_QUERY = (
-    f"SELECT {COLUMNS} "
-    f"FROM {TABLE} "
-    "ORDER BY WKDATE DESC, MACHCODE "
-    "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
-)
-
 # Full-table rows that should always feed detection (alerts / missingness),
 # even when they fall outside the recent TOP-N EDA window.
-ANOMALY_QUERY = (
-    f"SELECT {COLUMNS} "
-    f"FROM {TABLE} "
-    "WHERE DAILY_MC_RATIO > 100 "
+ANOMALY_PREDICATE = (
+    "DAILY_MC_RATIO > 100 "
     "   OR RUNTIME_SEC IS NULL "
     "   OR DAILY_MC_RATIO IS NULL "
     "   OR WKDATE IS NULL "
@@ -50,12 +41,18 @@ ANOMALY_QUERY = (
     "   OR MACHNAME IS NULL OR LTRIM(RTRIM(MACHNAME)) = '' "
     "   OR FACTORY IS NULL OR LTRIM(RTRIM(FACTORY)) = '' "
     "   OR RUNTIME_HOUR IS NULL "
-    "   OR LTRIM(RTRIM(CONVERT(varchar(50), RUNTIME_HOUR))) = '' "
+    "   OR LTRIM(RTRIM(CONVERT(varchar(50), RUNTIME_HOUR))) = ''"
+)
+
+ANOMALY_QUERY = (
+    f"SELECT {COLUMNS} "
+    f"FROM {TABLE} "
+    f"WHERE {ANOMALY_PREDICATE} "
     "ORDER BY WKDATE DESC, MACHCODE"
 )
 
 # Exact missingness over the whole table (not just the recent sample).
-MISSINGNESS_QUERY = f"""
+MISSINGNESS_SELECT = f"""
 SELECT
   COUNT_BIG(*) AS n,
   SUM(CASE WHEN MACHCODE IS NULL OR LTRIM(RTRIM(MACHCODE)) = '' THEN 1 ELSE 0 END) AS MACHCODE,
@@ -68,6 +65,54 @@ SELECT
   SUM(CASE WHEN FACTORY IS NULL OR LTRIM(RTRIM(FACTORY)) = '' THEN 1 ELSE 0 END) AS FACTORY
 FROM {TABLE}
 """
+MISSINGNESS_QUERY = MISSINGNESS_SELECT
+
+
+def normalize_factory(factory: str | None) -> str | None:
+    """Empty / 'all' means no factory filter."""
+    if factory is None:
+        return None
+    value = str(factory).strip()
+    if not value or value.lower() in {"all", "*"}:
+        return None
+    return value
+
+
+def _factory_clause(factory: str | None, *, has_where: bool = False) -> tuple[str, dict]:
+    factory = normalize_factory(factory)
+    if not factory:
+        return "", {}
+    joiner = " AND " if has_where else " WHERE "
+    return f"{joiner}LTRIM(RTRIM(FACTORY)) = :factory", {"factory": factory}
+
+
+def _filter_df_factory(df: pd.DataFrame, factory: str | None) -> pd.DataFrame:
+    factory = normalize_factory(factory)
+    if not factory or df is None or df.empty or "FACTORY" not in df.columns:
+        return df
+    mask = df["FACTORY"].map(
+        lambda v: str(v).strip() == factory if pd.notna(v) else False
+    )
+    return df.loc[mask].reset_index(drop=True)
+
+
+def get_factory_names() -> list[str]:
+    """Distinct factory codes for the dashboard dropdown."""
+    query = (
+        f"SELECT DISTINCT LTRIM(RTRIM(FACTORY)) AS FACTORY "
+        f"FROM {TABLE} "
+        "WHERE FACTORY IS NOT NULL AND LTRIM(RTRIM(FACTORY)) <> '' "
+        "ORDER BY FACTORY"
+    )
+    df = pd.read_sql(text(query), _get_engine())
+    names = []
+    seen = set()
+    for value in df["FACTORY"].tolist():
+        name = str(value).strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 @lru_cache(maxsize=1)
@@ -111,21 +156,42 @@ def _get_engine():
     )
 
 
-def get_raw_data() -> pd.DataFrame:
+def get_raw_data(factory: str | None = None) -> pd.DataFrame:
     """Recent sample used by rolling EDA charts."""
-    query = os.getenv("DB_QUERY", DEFAULT_QUERY).strip() or DEFAULT_QUERY
+    factory = normalize_factory(factory)
+    custom = (os.getenv("DB_QUERY") or "").strip()
+    if custom:
+        return _filter_df_factory(pd.read_sql(custom, _get_engine()), factory)
+
+    clause, params = _factory_clause(factory)
+    query = (
+        f"SELECT TOP 2000 {COLUMNS} "
+        f"FROM {TABLE}{clause} "
+        "ORDER BY WKDATE DESC, MACHCODE"
+    )
+    if params:
+        return pd.read_sql(text(query), _get_engine(), params=params)
     return pd.read_sql(query, _get_engine())
 
 
-def get_anomaly_rows() -> pd.DataFrame:
+def get_anomaly_rows(factory: str | None = None) -> pd.DataFrame:
     """Full-table rows with null/blank fields or DAILY_MC_RATIO > 100."""
-    return pd.read_sql(text(ANOMALY_QUERY), _get_engine())
+    clause, params = _factory_clause(factory, has_where=True)
+    query = (
+        f"SELECT {COLUMNS} "
+        f"FROM {TABLE} "
+        f"WHERE ({ANOMALY_PREDICATE}){clause} "
+        "ORDER BY WKDATE DESC, MACHCODE"
+    )
+    if params:
+        return pd.read_sql(text(query), _get_engine(), params=params)
+    return pd.read_sql(text(query), _get_engine())
 
 
-def get_detection_data() -> pd.DataFrame:
+def get_detection_data(factory: str | None = None) -> pd.DataFrame:
     """Recent sample plus full-table anomaly rows (deduped) for rule checks."""
-    recent = get_raw_data()
-    anomalies = get_anomaly_rows()
+    recent = get_raw_data(factory)
+    anomalies = get_anomaly_rows(factory)
     if anomalies.empty:
         return recent
     combined = pd.concat([recent, anomalies], ignore_index=True)
@@ -135,13 +201,15 @@ def get_detection_data() -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def get_full_missingness() -> tuple[dict, dict, int]:
+def get_full_missingness(factory: str | None = None) -> tuple[dict, dict, int]:
     """Exact Mp + absolute missing counts over the entire SQL table.
 
     Returns (missingness_pct, missing_counts, total_rows).
     """
+    clause, params = _factory_clause(factory)
+    query = f"{MISSINGNESS_SELECT.rstrip()}{clause}"
     with _get_engine().connect() as conn:
-        row = dict(conn.execute(text(MISSINGNESS_QUERY)).mappings().one())
+        row = dict(conn.execute(text(query), params).mappings().one())
 
     total = int(row.pop("n") or 0)
     counts = {col: int(row.get(col) or 0) for col in (
@@ -155,14 +223,20 @@ def get_full_missingness() -> tuple[dict, dict, int]:
     return mp, counts, total
 
 
-def get_data_count() -> int:
+def get_data_count(factory: str | None = None) -> int:
     """Total rows in the source table (full table, not the analytics sample)."""
+    clause, params = _factory_clause(factory)
+    query = f"SELECT COUNT(*) AS n FROM {TABLE}{clause}"
     with _get_engine().connect() as conn:
-        n = conn.execute(text(COUNT_QUERY)).scalar()
+        n = conn.execute(text(query), params).scalar()
     return int(n or 0)
 
 
-def get_data_page(page: int = 1, page_size: int = 15) -> tuple[pd.DataFrame, int]:
+def get_data_page(
+    page: int = 1,
+    page_size: int = 15,
+    factory: str | None = None,
+) -> tuple[pd.DataFrame, int]:
     """One page of the full table, newest WKDATE first. page is 1-based.
 
     Page 1 prepends full-table anomaly rows (missing values /
@@ -171,19 +245,32 @@ def get_data_page(page: int = 1, page_size: int = 15) -> tuple[pd.DataFrame, int
     """
     page = max(1, int(page))
     page_size = max(1, min(int(page_size), 200))
-    total = get_data_count()
+    factory = normalize_factory(factory)
+    total = get_data_count(factory)
 
-    anomalies = get_anomaly_rows() if page == 1 else pd.DataFrame()
+    anomalies = get_anomaly_rows(factory) if page == 1 else pd.DataFrame()
     anomaly_n = 0 if anomalies.empty else len(anomalies)
     # Reserve slots on page 1 for anomalies, then fill with normal rows.
     normal_limit = page_size if page > 1 else max(0, page_size - anomaly_n)
     normal_offset = 0 if page == 1 else max(0, (page - 1) * page_size - anomaly_n)
 
+    clause, factory_params = _factory_clause(factory)
+    page_query = (
+        f"SELECT {COLUMNS} "
+        f"FROM {TABLE}{clause} "
+        "ORDER BY WKDATE DESC, MACHCODE "
+        "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY"
+    )
+
     if normal_limit > 0:
         normal = pd.read_sql(
-            text(PAGE_QUERY),
+            text(page_query),
             _get_engine(),
-            params={"offset": int(normal_offset), "limit": int(normal_limit)},
+            params={
+                "offset": int(normal_offset),
+                "limit": int(normal_limit),
+                **factory_params,
+            },
         )
     else:
         normal = pd.DataFrame()

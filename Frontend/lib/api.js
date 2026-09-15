@@ -4,6 +4,18 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 export const WS_BASE =
   process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8000";
 
+export function withQuery(path, params = {}) {
+  const usp = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value == null) return;
+    const text = String(value).trim();
+    if (!text) return;
+    usp.set(key, text);
+  });
+  const query = usp.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 export async function fetchJSON(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
