@@ -26,7 +26,7 @@ from rules import (
     missing_value_alerts,
 )
 
-app = FastAPI(title="Automated Error Missing Values Detection Dashboard API")
+app = FastAPI(title="Automated Missing Value Error Detection Dashboard API")
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
@@ -205,9 +205,7 @@ async def get_alerts(
 
 @app.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
-    """Phase 4: live alert stream. Each message carries a server timestamp
-    and a computed diagnostic_latency_ms so the frontend can display/measure
-    detection-to-delivery latency.
+    """Phase 4: live alert stream.
 
     Pipeline work is sync (SQL + pandas) — run it in a thread so it cannot
     freeze the asyncio loop (which previously caused proxy ECONNRESET /
@@ -217,7 +215,6 @@ async def websocket_alerts(websocket: WebSocket):
     factory = websocket.query_params.get("factory")
     try:
         while True:
-            t0 = time.perf_counter()
             result = await asyncio.to_thread(_pipeline, factory)
             # result: recent, eda, schema_violations, mp, alerts, missing_counts, total_rows
             # Stream only row-level issues: missing_value + abnormal_daily_mc_ratio
@@ -225,11 +222,9 @@ async def websocket_alerts(websocket: WebSocket):
                 a for a in result[4]
                 if a.get("type") in ("missing_value", "abnormal_daily_mc_ratio")
             ]
-            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
 
             await websocket.send_json({
                 "server_time": time.time(),
-                "diagnostic_latency_ms": latency_ms,
                 "alert_count": len(alerts),
                 "alerts": alerts[:15],
                 "factory": normalize_factory(factory),

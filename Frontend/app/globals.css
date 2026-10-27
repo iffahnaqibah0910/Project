@@ -1,14 +1,15 @@
 :root {
-  --ink: #0c1210;
-  --panel: #121b19;
-  --panel-raised: #17221f;
-  --line: #223330;
-  --text-primary: #e8efe9;
-  --text-dim: #8ba39b;
-  --amber: #e0a640;
-  --amber-dim: #8a6a34;
-  --alert-red: #d9604f;
-  --ok-green: #5fae7d;
+  --ink: #e7ecea;
+  --panel: #ffffff;
+  --panel-raised: #f2f5f4;
+  --line: #d3dcd8;
+  --grid: rgba(28, 40, 36, 0.05);
+  --text-primary: #1c2824;
+  --text-dim: #5d726a;
+  --amber: #9a6410;
+  --amber-dim: #f6e7c8;
+  --alert-red: #c44536;
+  --ok-green: #1f7a4d;
   --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -22,8 +23,8 @@ html, body {
   color: var(--text-primary);
   font-family: var(--sans);
   background-image:
-    linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
   background-size: 48px 48px;
   background-attachment: fixed;
   background-color: var(--ink);
@@ -34,7 +35,7 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background: radial-gradient(ellipse at top, rgba(224,166,64,0.05), transparent 60%);
+  background: radial-gradient(ellipse at top, rgba(154,100,16,0.07), transparent 60%);
   pointer-events: none;
 }
 
