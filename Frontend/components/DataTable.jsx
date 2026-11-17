@@ -138,6 +138,9 @@ export default function DataTable({ factory = "", refreshTick = 0, onStatsChange
   );
 
   const issueCount = annotated.filter(({ issues }) => Object.keys(issues).length > 0).length;
+  const abnormalCount = annotated.filter(
+    ({ issues }) => issues.DAILY_MC_RATIO === "abnormal_ratio",
+  ).length;
 
   useEffect(() => {
     if (rows == null) {
@@ -151,11 +154,11 @@ export default function DataTable({ factory = "", refreshTick = 0, onStatsChange
     }
     onStatsChangeRef.current?.({
       factory,
-      flagged: issueCount,
+      flagged: abnormalCount,
       pageRows: rows.length,
       at: Date.now(),
     });
-  }, [factory, rows, issueCount]);
+  }, [factory, rows, abnormalCount]);
 
   function goToPage(raw) {
     const n = Number.parseInt(String(raw).trim(), 10);

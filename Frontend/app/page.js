@@ -113,7 +113,10 @@ export default function Dashboard() {
         field = key;
       }
     }
-    return field == null ? { field: null, pct: 0 } : { field, pct };
+    if (field == null) return { field: null, pct: 0, count: 0 };
+    const rawCount = missingness?.missing_counts?.[field];
+    const count = rawCount == null ? null : Number(rawCount);
+    return { field, pct, count: Number.isFinite(count) ? count : null };
   }, [missingness]);
 
   const refreshTimes = [missingnessAt, tableStatus.at].filter((n) => n != null);
@@ -171,6 +174,7 @@ export default function Dashboard() {
         alertCount={alertStatus.count}
         connected={alertStatus.connected}
         worstPct={worstMissing?.pct}
+        worstCount={worstMissing?.count}
         worstField={worstMissing?.field}
         missingReady={Boolean(missingness)}
         flagged={tableStatus.flagged}

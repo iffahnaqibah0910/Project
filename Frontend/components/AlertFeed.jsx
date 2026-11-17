@@ -62,7 +62,7 @@ export default function AlertFeed({ factory = "", onStatusChange }) {
       <div className="panel-head">
         <h3>
           Alert Stream
-          <span className={`dot ${connected ? "on" : "off"}`} />
+          <span className={`dot ${alerts.length > 0 ? "off" : "on"}`} />
         </h3>
         <span className="stream-scope">{factory || "All factories"}</span>
       </div>

@@ -34,9 +34,9 @@ function formatAgo(ts, now) {
 
 function toneFor(kind, value) {
   if (value == null) return "";
-  if (kind === "alerts") return value > 0 ? "is-bad" : "is-ok";
-  if (kind === "missing") return value > 0 ? "is-bad" : "is-ok";
-  if (kind === "flagged") return value > 0 ? "is-warn" : "is-ok";
+  if (kind === "alerts" || kind === "missing" || kind === "flagged") {
+    return value > 0 ? "is-bad" : "";
+  }
   if (kind === "refresh") return value > 6 * 60 ? "is-warn" : "";
   return "";
 }
@@ -45,6 +45,7 @@ export default function StatusStrip({
   alertCount,
   connected,
   worstPct,
+  worstCount,
   worstField,
   missingReady,
   flagged,
@@ -73,17 +74,24 @@ export default function StatusStrip({
     {
       key: "missing",
       label: "Worst missing",
-      value: !missingReady || worstPct == null ? "—" : `${worstPct}%`,
+      value:
+        !missingReady || worstPct == null
+          ? "—"
+          : !(worstPct > 0) || worstCount === 0
+            ? "0%"
+            : worstCount > 0
+              ? `${worstCount} · ${worstPct}%`
+              : `${worstPct}%`,
       hint: !missingReady
         ? "Loading"
-        : worstPct > 0
+        : worstPct > 0 && worstCount !== 0
           ? fieldLabel(worstField)
           : "No missing values",
       tone: toneFor("missing", missingReady ? worstPct : null),
     },
     {
       key: "flagged",
-      label: "Flagged rows",
+      label: "Abnormal MC ratio",
       value: !tableReady || flagged == null ? "—" : String(flagged),
       hint: !tableReady
         ? "Loading"
