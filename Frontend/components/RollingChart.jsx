@@ -16,9 +16,9 @@ import "chartjs-adapter-date-fns";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, TimeScale);
 
-const AMBER = "#e0a640";
-const GREEN = "#5fae7d";
-const DIM = "#8ba39b";
+const AMBER = "#9a6410";
+const DIM = "#5d726a";
+const GRID = "rgba(28, 40, 36, 0.1)";
 
 function timeUnitForSpan(timestamps) {
   const times = timestamps
@@ -34,7 +34,7 @@ function timeUnitForSpan(timestamps) {
   return "minute";
 }
 
-export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
+export default function RollingChart({ eda, sensor = "DAILY_MC_RATIO" }) {
   if (!eda) return <div className="chart-empty">Loading EDA…</div>;
   if (eda.length === 0) return <div className="chart-empty">No chart data for this factory.</div>;
 
@@ -49,7 +49,7 @@ export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
     labels,
     datasets: [
       {
-        label: `${sensor} mean`,
+        label: `${sensor} Mean`,
         data: mean,
         borderColor: AMBER,
         backgroundColor: "transparent",
@@ -61,7 +61,7 @@ export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
       {
         label: "+2σ",
         data: upper,
-        borderColor: "rgba(224,166,64,0.45)",
+        borderColor: "rgba(154,100,16,0.45)",
         backgroundColor: "transparent",
         pointRadius: 0,
         borderWidth: 1.5,
@@ -71,7 +71,7 @@ export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
       {
         label: "-2σ",
         data: lower,
-        borderColor: "rgba(224,166,64,0.45)",
+        borderColor: "rgba(154,100,16,0.45)",
         backgroundColor: "transparent",
         pointRadius: 0,
         borderWidth: 1.5,
@@ -86,44 +86,36 @@ export default function RollingChart({ eda, sensor = "RUNTIME_SEC" }) {
     maintainAspectRatio: false,
     animation: false,
     plugins: {
-      legend: {
-        labels: {
-          color: DIM,
-          font: { family: "Inter", size: 11 },
-          usePointStyle: true,
-          pointStyleWidth: 22,
-          generateLabels(chart) {
-            const items = ChartJS.defaults.plugins.legend.labels.generateLabels(chart);
-            return items.map((item) => {
-              const isSigma = item.text === "+2σ" || item.text === "-2σ";
-              return {
-                ...item,
-                pointStyle: "line",
-                lineWidth: isSigma ? 1.5 : 2,
-                lineDash: isSigma ? [3, 3] : [],
-              };
-            });
-          },
-        },
+      legend: { display: false },
+      tooltip: {
+        mode: "index",
+        intersect: false,
+        backgroundColor: "#ffffff",
+        titleColor: "#1c2824",
+        bodyColor: "#5d726a",
+        borderColor: "#d3dcd8",
+        borderWidth: 1,
       },
-      tooltip: { mode: "index", intersect: false },
     },
     scales: {
       x: {
         type: "time",
-        time: { unit: xUnit },
+        time: { unit: xUnit, tooltipFormat: "MMM d, yyyy" },
         ticks: { color: DIM, maxTicksLimit: 8 },
-        grid: { color: "rgba(34,51,48,0.6)" },
+        grid: { color: GRID },
+        border: { color: GRID },
       },
       y: {
-        ticks: { color: DIM },
-        grid: { color: "rgba(34,51,48,0.6)" },
+        max: 85,
+        ticks: { color: DIM, stepSize: 5 },
+        grid: { color: GRID },
+        border: { color: GRID },
       },
     },
   };
 
   return (
-    <div style={{ height: 280 }}>
+    <div style={{ height: 312 }}>
       <Line data={data} options={options} />
     </div>
   );

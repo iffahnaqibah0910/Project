@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchJSON, withQuery } from "../lib/api";
 
 const PAGE_SIZE = 15;
@@ -82,7 +82,7 @@ function formatValue(key, value) {
   return String(value);
 }
 
-export default function DataTable({ factory = "" }) {
+export default function DataTable({ factory = "", refreshTick = 0, onStatsChange }) {
   const [page, setPage] = useState(1); // 1-based, matches API
   const [jumpInput, setJumpInput] = useState("");
   const [rows, setRows] = useState(null);
@@ -90,6 +90,8 @@ export default function DataTable({ factory = "" }) {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const onStatsChangeRef = useRef(onStatsChange);
+  onStatsChangeRef.current = onStatsChange;
 
   useEffect(() => {
     setPage(1);
@@ -99,10 +101,11 @@ export default function DataTable({ factory = "" }) {
 
   useEffect(() => {
     const ac = new AbortController();
+    const background = rows != null;
 
     async function loadPage() {
       try {
-        setLoading(true);
+        if (!background) setLoading(true);
         setError(null);
         const data = await fetchJSON(
           withQuery("/api/data", { page, page_size: PAGE_SIZE, factory }),
@@ -119,7 +122,7 @@ export default function DataTable({ factory = "" }) {
       } catch (e) {
         if (ac.signal.aborted || e.name === "AbortError") return;
         setError(e.message || "Failed to load table");
-        setRows([]);
+        if (!background) setRows([]);
       } finally {
         if (!ac.signal.aborted) setLoading(false);
       }
@@ -127,7 +130,7 @@ export default function DataTable({ factory = "" }) {
 
     loadPage();
     return () => ac.abort();
-  }, [page, factory]);
+  }, [page, factory, refreshTick]);
 
   const annotated = useMemo(
     () => (rows || []).map((row) => ({ row, issues: rowIssues(row) })),
@@ -135,6 +138,24 @@ export default function DataTable({ factory = "" }) {
   );
 
   const issueCount = annotated.filter(({ issues }) => Object.keys(issues).length > 0).length;
+
+  useEffect(() => {
+    if (rows == null) {
+      onStatsChangeRef.current?.({
+        factory,
+        flagged: null,
+        pageRows: null,
+        at: null,
+      });
+      return;
+    }
+    onStatsChangeRef.current?.({
+      factory,
+      flagged: issueCount,
+      pageRows: rows.length,
+      at: Date.now(),
+    });
+  }, [factory, rows, issueCount]);
 
   function goToPage(raw) {
     const n = Number.parseInt(String(raw).trim(), 10);

@@ -11,7 +11,7 @@ export default function MissingnessPanel({ missingness, factory = "" }) {
   return (
     <div className="panel">
       <div className="panel-head">
-        <h3>Missingness (Mp)</h3>
+        <h3>Missing Values</h3>
         {total_rows != null && (
           <span className="meta">
             {factory || "All factories"} · {total_rows.toLocaleString()} rows

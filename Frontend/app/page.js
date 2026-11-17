@@ -1,21 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchJSON, withQuery } from "../lib/api";
 import MissingnessPanel from "../components/MissingnessPanel";
 import RollingChart from "../components/RollingChart";
 import AlertFeed from "../components/AlertFeed";
 import DataTable from "../components/DataTable";
+import StatusStrip from "../components/StatusStrip";
 
-const SENSORS = ["RUNTIME_SEC", "DAILY_MC_RATIO"];
+const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
 
 export default function Dashboard() {
   const [missingness, setMissingness] = useState(null);
   const [eda, setEda] = useState(null);
-  const [sensor, setSensor] = useState("RUNTIME_SEC");
   const [factories, setFactories] = useState([]);
   const [factory, setFactory] = useState("");
   const [error, setError] = useState(null);
+  const [alertStatus, setAlertStatus] = useState({
+    count: null,
+    connected: false,
+    at: null,
+  });
+  const [tableStatus, setTableStatus] = useState({
+    flagged: null,
+    pageRows: null,
+    at: null,
+  });
+  const [missingnessAt, setMissingnessAt] = useState(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,7 +58,10 @@ export default function Dashboard() {
     async function loadMissingness() {
       try {
         const mp = await fetchJSON(withQuery("/api/missingness", { factory }));
-        if (!cancelled) setMissingness(mp);
+        if (!cancelled) {
+          setMissingness(mp);
+          setMissingnessAt(Date.now());
+        }
       } catch (e) {
         if (cancelled) return;
         setError((prev) => prev || e.message || "Failed to fetch missingness");
@@ -67,50 +82,83 @@ export default function Dashboard() {
 
     setMissingness(null);
     setEda(null);
+    setMissingnessAt(null);
+    setAlertStatus({ count: null, connected: false, at: null });
+    setTableStatus({ flagged: null, pageRows: null, at: null });
     loadMissingness();
     loadEda();
+
+    const id = setInterval(() => {
+      if (cancelled) return;
+      loadMissingness();
+      loadEda();
+      setRefreshTick((n) => n + 1);
+    }, SNAPSHOT_REFRESH_MS);
+
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, [factory]);
 
-  const factoryLabel = factory || "All factories";
+  const worstMissing = useMemo(() => {
+    const pcts = missingness?.missingness_pct;
+    if (!pcts) return null;
+    let field = null;
+    let pct = -1;
+    for (const [key, value] of Object.entries(pcts)) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > pct) {
+        pct = n;
+        field = key;
+      }
+    }
+    return field == null ? { field: null, pct: 0 } : { field, pct };
+  }, [missingness]);
+
+  const refreshTimes = [missingnessAt, tableStatus.at].filter((n) => n != null);
+  const lastRefreshAt = refreshTimes.length ? Math.max(...refreshTimes) : null;
+
+  function handleAlertStatus(next) {
+    if ((next.factory ?? "") !== factory) return;
+    setAlertStatus({
+      count: next.count,
+      connected: Boolean(next.connected),
+      at: next.at ?? null,
+    });
+  }
+
+  function handleTableStatus(next) {
+    if ((next.factory ?? "") !== factory) return;
+    setTableStatus({
+      flagged: next.flagged,
+      pageRows: next.pageRows,
+      at: next.at ?? null,
+    });
+  }
 
   return (
     <main className="dashboard">
       <header className="topbar">
-        <div>
+        <div className="title-block">
           <span className="eyebrow">Missing Values</span>
-          <h1>Automated Error Of Missing Values Detection Dashboard For Machine Running Data Monitoring</h1>
+          <h1>Automated Missing Value Error Detection Dashboard For Machine Running Data Monitoring</h1>
         </div>
-        <div className="controls">
-          <label className="factory-picker">
-            <span>Factory</span>
-            <select
-              value={factory}
-              onChange={(e) => setFactory(e.target.value)}
-              aria-label="Choose factory"
-            >
-              <option value="">All factories</option>
-              {factories.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="sensor-picker">
-            {SENSORS.map((s) => (
-              <button
-                key={s}
-                className={s === sensor ? "active" : ""}
-                onClick={() => setSensor(s)}
-              >
-                {s}
-              </button>
+        <label className="factory-picker">
+          <span>Factory</span>
+          <select
+            value={factory}
+            onChange={(e) => setFactory(e.target.value)}
+            aria-label="Choose factory"
+          >
+            <option value="">All factories</option>
+            {factories.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
             ))}
-          </div>
-        </div>
+          </select>
+        </label>
       </header>
 
       {error && (
@@ -119,9 +167,21 @@ export default function Dashboard() {
         </p>
       )}
 
+      <StatusStrip
+        alertCount={alertStatus.count}
+        connected={alertStatus.connected}
+        worstPct={worstMissing?.pct}
+        worstField={worstMissing?.field}
+        missingReady={Boolean(missingness)}
+        flagged={tableStatus.flagged}
+        pageRows={tableStatus.pageRows}
+        tableReady={tableStatus.flagged != null}
+        lastRefreshAt={lastRefreshAt}
+      />
+
       <div className="top-row">
         <aside className="sidebar">
-          <AlertFeed factory={factory} />
+          <AlertFeed factory={factory} onStatusChange={handleAlertStatus} />
         </aside>
         <div className="missingness-slot">
           <MissingnessPanel missingness={missingness} factory={factory} />
@@ -130,15 +190,34 @@ export default function Dashboard() {
 
       <div className="grid">
         <div className="table-slot">
-          <DataTable factory={factory} />
+          <DataTable
+            factory={factory}
+            refreshTick={refreshTick}
+            onStatsChange={handleTableStatus}
+          />
         </div>
 
         <section className="chart-panel">
           <div className="panel-head">
-            <h3>Time Series Chart of Exploratory Data Analysis — {sensor}</h3>
-            <span className="chart-scope">{factoryLabel}</span>
+            <h3>Daily MC Ratio Trend</h3>
           </div>
-          <RollingChart eda={eda} sensor={sensor} />
+          <div className="chart-frame">
+            <div className="chart-legend" aria-label="Chart legend">
+              <span className="legend-item">
+                <span className="legend-line solid" />
+                Mean
+              </span>
+              <span className="legend-item">
+                <span className="legend-line dashed" />
+                +2σ
+              </span>
+              <span className="legend-item">
+                <span className="legend-line dashed" />
+                -2σ
+              </span>
+            </div>
+            <RollingChart eda={eda} sensor="DAILY_MC_RATIO" />
+          </div>
         </section>
       </div>
 
@@ -159,6 +238,9 @@ export default function Dashboard() {
           border-bottom: 5px solid var(--line);
           padding-bottom: 20px;
         }
+        .title-block {
+          min-width: 0;
+        }
         .eyebrow {
           font-family: var(--mono);
           font-size: 11px;
@@ -167,16 +249,10 @@ export default function Dashboard() {
           color: var(--amber);
         }
         h1 { margin: 4px 0 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
-        .controls {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          justify-content: center;
-          gap: 14px;
-        }
         .factory-picker {
           display: inline-flex;
           align-items: center;
+          justify-content: center;
           gap: 8px;
           font-family: var(--mono);
           font-size: 11px;
@@ -199,23 +275,6 @@ export default function Dashboard() {
         .factory-picker select:focus {
           outline: none;
           border-color: var(--amber);
-        }
-        .sensor-picker { display: flex; gap: 6px; }
-        .sensor-picker button {
-          background: var(--panel);
-          border: 1px solid var(--line);
-          color: var(--text-dim);
-          padding: 8px 14px;
-          border-radius: 4px;
-          font-size: 12px;
-          text-transform: capitalize;
-          cursor: pointer;
-          transition: all 0.15s ease;
-        }
-        .sensor-picker button.active {
-          border-color: var(--amber);
-          color: var(--amber);
-          background: rgba(224,166,64,0.08);
         }
         .top-row {
           display: grid;
@@ -242,14 +301,50 @@ export default function Dashboard() {
           border-radius: 6px;
           padding: 20px;
         }
-        .panel-head { margin-bottom: 14px; }
-        .panel-head h3 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
-        .chart-scope {
-          display: block;
-          margin-top: 4px;
-          font-family: var(--mono);
-          font-size: 11px;
-          color: var(--text-dim);
+        .panel-head {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 14px;
+        }
+        .panel-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+        .chart-frame {
+          position: relative;
+          background: var(--panel);
+        }
+        .chart-legend {
+          position: absolute;
+          top: 18px;
+          right: 16px;
+          z-index: 2;
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 12px;
+          background: var(--panel-raised);
+          border: 1px solid var(--line);
+          border-radius: 4px;
+          padding: 6px 12px;
+        }
+        .legend-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          color: var(--text-primary);
+          white-space: nowrap;
+        }
+        .legend-line {
+          width: 22px;
+          height: 0;
+          border-top: 2px solid var(--amber);
+        }
+        .legend-line.dashed {
+          border-top-width: 1.5px;
+          border-top-style: dashed;
+          opacity: 0.7;
         }
         .error {
           background: rgba(217,96,79,0.1);
@@ -263,6 +358,10 @@ export default function Dashboard() {
         @media (max-width: 960px) {
           .top-row {
             grid-template-columns: 1fr;
+          }
+          .panel-head {
+            flex-direction: column;
+            align-items: flex-start;
           }
         }
       `}</style>

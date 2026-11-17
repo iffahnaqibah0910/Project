@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { WS_BASE } from "../lib/api";
 
-export default function AlertFeed({ factory = "" }) {
+export default function AlertFeed({ factory = "", onStatusChange }) {
   const [alerts, setAlerts] = useState([]);
-  const [latency, setLatency] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [tickAt, setTickAt] = useState(null);
   const wsRef = useRef(null);
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
 
   useEffect(() => {
     let closed = false;
@@ -24,21 +26,36 @@ export default function AlertFeed({ factory = "" }) {
     ws.onmessage = (event) => {
       if (closed) return;
       const payload = JSON.parse(event.data);
-      setLatency(payload.diagnostic_latency_ms);
       setAlerts(payload.alerts.slice().reverse());
+      setTickAt(Date.now());
     };
 
     return () => {
       closed = true;
       wsRef.current = null;
       setAlerts([]);
-      setLatency(null);
+      setTickAt(null);
+      onStatusChangeRef.current?.({
+        factory,
+        count: null,
+        connected: false,
+        at: null,
+      });
       // Close only if still connecting/open — avoids noisy errors on Strict Mode remount.
       if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
         ws.close();
       }
     };
   }, [factory]);
+
+  useEffect(() => {
+    onStatusChangeRef.current?.({
+      factory,
+      count: connected || tickAt != null ? alerts.length : null,
+      connected,
+      at: tickAt,
+    });
+  }, [factory, alerts, connected, tickAt]);
 
   return (
     <div className="panel">
@@ -47,10 +64,7 @@ export default function AlertFeed({ factory = "" }) {
           Alert Stream
           <span className={`dot ${connected ? "on" : "off"}`} />
         </h3>
-        <span className="latency">
-          {latency != null ? `Diagnostic Latency: ${latency}ms · ` : ""}
-          {factory || "All factories"}
-        </span>
+        <span className="stream-scope">{factory || "All factories"}</span>
       </div>
 
       {alerts.length === 0 ? (
@@ -95,7 +109,7 @@ export default function AlertFeed({ factory = "" }) {
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .dot.on { background: var(--ok-green); box-shadow: 0 0 6px var(--ok-green); }
         .dot.off { background: var(--alert-red); }
-        .latency { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+        .stream-scope { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
         .empty { font-size: 13px; color: var(--text-dim); }
         .alert-list {
           list-style: none;
